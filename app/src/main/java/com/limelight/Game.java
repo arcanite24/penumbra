@@ -381,8 +381,16 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         clipboardManager = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
 
         // Start the spinner
-        spinner = SpinnerDialog.displayDialog(this, getResources().getString(R.string.conn_establishing_title),
-                getResources().getString(R.string.conn_establishing_msg), true);
+        // Penumbra (PEN-3): full-screen launch screen with the game's cover art
+        java.io.File loaderCover = null;
+        String loaderPcUuid = getIntent().getStringExtra(EXTRA_PC_UUID);
+        int loaderAppId = getIntent().getIntExtra(EXTRA_APP_ID, StreamConfiguration.INVALID_APP_ID);
+        if (loaderPcUuid != null && loaderAppId != StreamConfiguration.INVALID_APP_ID) {
+            loaderCover = new com.limelight.grid.assets.DiskAssetLoader(this).getFile(loaderPcUuid, loaderAppId);
+        }
+        spinner = SpinnerDialog.displayStreamLoader(this, getIntent().getStringExtra(EXTRA_APP_NAME),
+                getIntent().getStringExtra(EXTRA_PC_NAME), loaderCover,
+                getResources().getString(R.string.conn_establishing_msg));
 
 
         Display currentDisplay = null;
@@ -622,11 +630,11 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
                     if (!willStreamHdr) {
                         // Nope, no HDR for us :(
-                        Toast.makeText(this, "Display does not support HDR10", Toast.LENGTH_LONG).show();
+                        com.limelight.utils.PenumbraToast.makeText(this, "Display does not support HDR10", Toast.LENGTH_LONG).show();
                     }
                 }
                 else {
-                    Toast.makeText(this, "HDR requires Android 7.0 or later", Toast.LENGTH_LONG).show();
+                    com.limelight.utils.PenumbraToast.makeText(this, "HDR requires Android 7.0 or later", Toast.LENGTH_LONG).show();
                 }
             }
         }
@@ -707,16 +715,16 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 // Don't stream HDR if the decoder can't support it
         if (willStreamHdr && !decoderRenderer.isHevcMain10Hdr10Supported() && !decoderRenderer.isAv1Main10Supported()) {
             willStreamHdr = false;
-            Toast.makeText(this, "Decoder does not support HDR10 profile", Toast.LENGTH_LONG).show();
+            com.limelight.utils.PenumbraToast.makeText(this, "Decoder does not support HDR10 profile", Toast.LENGTH_LONG).show();
         }
         // Display a message to the user if HEVC was forced on but we still didn't find a decoder
         if (prefConfig.videoFormat == PreferenceConfiguration.FormatOption.FORCE_HEVC && !decoderRenderer.isHevcSupported()) {
-            Toast.makeText(this, "No HEVC decoder found", Toast.LENGTH_LONG).show();
+            com.limelight.utils.PenumbraToast.makeText(this, "No HEVC decoder found", Toast.LENGTH_LONG).show();
         }
 
         // Display a message to the user if AV1 was forced on but we still didn't find a decoder
         if (prefConfig.videoFormat == PreferenceConfiguration.FormatOption.FORCE_AV1 && !decoderRenderer.isAv1Supported()) {
-            Toast.makeText(this, "No AV1 decoder found", Toast.LENGTH_LONG).show();
+            com.limelight.utils.PenumbraToast.makeText(this, "No AV1 decoder found", Toast.LENGTH_LONG).show();
         }
 
         // H.264 is always supported
@@ -1821,7 +1829,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
             if (message != null) {
                 if (prefConfig.enableLatencyToast) {
-                    Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+                    com.limelight.utils.PenumbraToast.makeText(this, message, Toast.LENGTH_LONG).show();
                 }
             }
 
@@ -2329,17 +2337,17 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                     try {
                         if (!httpConn.sendClipboard(clipboardText)) {
                             if (prefConfig.smartClipboardSyncToast) {
-                                Game.this.runOnUiThread(() -> Toast.makeText(Game.this, getString(R.string.clipboard_sync_unsupported), Toast.LENGTH_SHORT).show());
+                                Game.this.runOnUiThread(() -> com.limelight.utils.PenumbraToast.makeText(Game.this, getString(R.string.clipboard_sync_unsupported), Toast.LENGTH_SHORT).show());
                             }
                         } else {
                             if (prefConfig.smartClipboardSyncToast) {
-                                Game.this.runOnUiThread(() -> Toast.makeText(Game.this, getString(R.string.send_clipboard_success), Toast.LENGTH_SHORT).show());
+                                Game.this.runOnUiThread(() -> com.limelight.utils.PenumbraToast.makeText(Game.this, getString(R.string.send_clipboard_success), Toast.LENGTH_SHORT).show());
                             }
                         }
                     } catch (Exception e) {
                         e.printStackTrace();
                         if (prefConfig.smartClipboardSyncToast) {
-                            Game.this.runOnUiThread(() -> Toast.makeText(Game.this, getString(R.string.send_clipboard_failed) + e.getMessage(), Toast.LENGTH_SHORT).show());
+                            Game.this.runOnUiThread(() -> com.limelight.utils.PenumbraToast.makeText(Game.this, getString(R.string.send_clipboard_failed) + e.getMessage(), Toast.LENGTH_SHORT).show());
                         }
                     }
                 }
@@ -2388,12 +2396,12 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
                     clipboardManager.setPrimaryClip(clipData);
                     if (prefConfig.smartClipboardSyncToast) {
-                        Game.this.runOnUiThread(() -> Toast.makeText(Game.this, getString(R.string.get_clipboard_success), Toast.LENGTH_SHORT).show());
+                        Game.this.runOnUiThread(() -> com.limelight.utils.PenumbraToast.makeText(Game.this, getString(R.string.get_clipboard_success), Toast.LENGTH_SHORT).show());
                     }
                 } catch (Exception e) {
                     e.printStackTrace();
                     if (prefConfig.smartClipboardSyncToast) {
-                        Game.this.runOnUiThread(() -> Toast.makeText(Game.this, getString(R.string.get_clipboard_failed) + e.getMessage(), Toast.LENGTH_SHORT).show());
+                        Game.this.runOnUiThread(() -> com.limelight.utils.PenumbraToast.makeText(Game.this, getString(R.string.get_clipboard_failed) + e.getMessage(), Toast.LENGTH_SHORT).show());
                     }
                 }
                 clipboardSyncRunning = false;
@@ -3473,9 +3481,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                         try {
                             sleep(1000);
                             httpConn.quitApp();
-                            Game.this.runOnUiThread(() -> Toast.makeText(Game.this, Game.this.getResources().getString(R.string.applist_quit_success) + " " + appName, Toast.LENGTH_LONG).show());
+                            Game.this.runOnUiThread(() -> com.limelight.utils.PenumbraToast.makeText(Game.this, Game.this.getResources().getString(R.string.applist_quit_success) + " " + appName, Toast.LENGTH_LONG).show());
                         } catch (Exception e) {
-                            Game.this.runOnUiThread(() -> Toast.makeText(Game.this, e.getMessage(), Toast.LENGTH_LONG).show());
+                            Game.this.runOnUiThread(() -> com.limelight.utils.PenumbraToast.makeText(Game.this, e.getMessage(), Toast.LENGTH_LONG).show());
                         }
                     }
                 }
@@ -3548,7 +3556,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                     // If video initialization failed and the surface is still valid, display extra information for the user
                     Surface currentSurface = streamContainer.getSurface();
                     if (stage.contains("video") && currentSurface != null && currentSurface.isValid()) {
-                        Toast.makeText(Game.this, getResources().getText(R.string.video_decoder_init_failed), Toast.LENGTH_LONG).show();
+                        com.limelight.utils.PenumbraToast.makeText(Game.this, getResources().getText(R.string.video_decoder_init_failed), Toast.LENGTH_LONG).show();
                     }
 
                     String dialogText = getResources().getString(R.string.conn_error_msg) + " " + stage +" (error "+errorCode+")";
@@ -3781,7 +3789,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
-                Toast.makeText(Game.this, message, Toast.LENGTH_LONG).show();
+                com.limelight.utils.PenumbraToast.makeText(Game.this, message, Toast.LENGTH_LONG).show();
             }
         });
     }
@@ -3792,7 +3800,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             runOnUiThread(new Runnable() {
                 @Override
                 public void run() {
-                    Toast.makeText(Game.this, message, Toast.LENGTH_LONG).show();
+                    com.limelight.utils.PenumbraToast.makeText(Game.this, message, Toast.LENGTH_LONG).show();
                 }
             });
         }
@@ -4046,9 +4054,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     public void toggleZoomMode() {
         this.isPanZoomMode = !this.isPanZoomMode;
         if (this.isPanZoomMode) {
-            Toast.makeText(this, getString(R.string.pan_zoom_mode_enabled), Toast.LENGTH_SHORT).show();
+            com.limelight.utils.PenumbraToast.makeText(this, getString(R.string.pan_zoom_mode_enabled), Toast.LENGTH_SHORT).show();
         } else {
-            Toast.makeText(this, getString(R.string.pan_zoom_mode_disabled), Toast.LENGTH_SHORT).show();
+            com.limelight.utils.PenumbraToast.makeText(this, getString(R.string.pan_zoom_mode_disabled), Toast.LENGTH_SHORT).show();
         }
         updateZoomButtonAppearance();
 

@@ -170,7 +170,7 @@ public class StreamSettings extends AppCompatActivity implements SettingsSection
                 startActivity(intent, null);
             } else {
                 if (newPrefs.language == PreferenceConfiguration.DEFAULT_LANGUAGE) {
-                    Toast.makeText(this, "Language has been reset to default, please restart the app!", Toast.LENGTH_LONG).show();
+                    com.limelight.utils.PenumbraToast.makeText(this, "Language has been reset to default, please restart the app!", Toast.LENGTH_LONG).show();
                     System.exit(0);
                 }
             }
@@ -828,7 +828,7 @@ public class StreamSettings extends AppCompatActivity implements SettingsSection
                         String logs = tracker.getLog(context);
 
                         if (logs == null || logs.trim().isEmpty()) {
-                            Toast.makeText(context, context.getString(R.string.toast_no_logs), Toast.LENGTH_SHORT).show();
+                            com.limelight.utils.PenumbraToast.makeText(context, context.getString(R.string.toast_no_logs), Toast.LENGTH_SHORT).show();
                             return false;
                         }
 
@@ -862,7 +862,7 @@ public class StreamSettings extends AppCompatActivity implements SettingsSection
                         } catch (IOException e) {
                             Log.d("PerformanceDataTracker", "Error creating log file");
                         } catch (android.content.ActivityNotFoundException ex) {
-                            Toast.makeText(context, noEmailClientsMsg, Toast.LENGTH_SHORT).show();
+                            com.limelight.utils.PenumbraToast.makeText(context, noEmailClientsMsg, Toast.LENGTH_SHORT).show();
                         }
                         return false;
                     }
@@ -880,7 +880,7 @@ public class StreamSettings extends AppCompatActivity implements SettingsSection
                         }
                         File file1= getJsonContent(requireActivity(),file);
                         if(file1==null){
-                            Toast.makeText(requireActivity(),getString(R.string.pref_error_occurred),Toast.LENGTH_SHORT).show();
+                            com.limelight.utils.PenumbraToast.makeText(requireActivity(),getString(R.string.pref_error_occurred),Toast.LENGTH_SHORT).show();
                             return false;
                         }
                         Uri uri;
@@ -918,14 +918,14 @@ public class StreamSettings extends AppCompatActivity implements SettingsSection
                 bitrateEditPref.setOnPreferenceChangeListener((preference, newValue) -> {
                     String value = (String) newValue;
                     if (TextUtils.isEmpty(value)) {
-                        Toast.makeText(getActivity(), getString(R.string.pref_enter_value_0_9999), Toast.LENGTH_SHORT).show();
+                        com.limelight.utils.PenumbraToast.makeText(getActivity(), getString(R.string.pref_enter_value_0_9999), Toast.LENGTH_SHORT).show();
                         return false;
                     }
                     float bitrateValue = Float.parseFloat(value) * 1000;
                     int bitrate = (int) bitrateValue;
                     SharedPreferences prefs = getPrefs();
                     prefs.edit().putInt(PreferenceConfiguration.BITRATE_PREF_STRING, bitrate).apply();
-                    Toast.makeText(getActivity(), getString(R.string.pref_set_success), Toast.LENGTH_SHORT).show();
+                    com.limelight.utils.PenumbraToast.makeText(getActivity(), getString(R.string.pref_set_success), Toast.LENGTH_SHORT).show();
                     return true;
                 });
             }
@@ -940,14 +940,14 @@ public class StreamSettings extends AppCompatActivity implements SettingsSection
                 resolutionEditPref.setOnPreferenceChangeListener((preference, newValue) -> {
                     String value = (String) newValue;
                     if (TextUtils.isEmpty(value)) {
-                        Toast.makeText(getActivity(), getString(R.string.pref_enter_value_0_9999), Toast.LENGTH_SHORT).show();
+                        com.limelight.utils.PenumbraToast.makeText(getActivity(), getString(R.string.pref_enter_value_0_9999), Toast.LENGTH_SHORT).show();
                         return false;
                     }
 
                     // Verify format: [width]x[height]
                     String[] resolutionSegments = value.split("x");
                     if (resolutionSegments.length != 2) {
-                        Toast.makeText(getActivity(), getString(R.string.pref_error_occurred), Toast.LENGTH_SHORT).show();
+                        com.limelight.utils.PenumbraToast.makeText(getActivity(), getString(R.string.pref_error_occurred), Toast.LENGTH_SHORT).show();
                         return false;
                     }
 
@@ -956,7 +956,7 @@ public class StreamSettings extends AppCompatActivity implements SettingsSection
                         int height = Integer.parseInt(resolutionSegments[1]);
                         
                         if (width <= 0 || height <= 0) {
-                            Toast.makeText(getActivity(), getString(R.string.pref_error_occurred), Toast.LENGTH_SHORT).show();
+                            com.limelight.utils.PenumbraToast.makeText(getActivity(), getString(R.string.pref_error_occurred), Toast.LENGTH_SHORT).show();
                             return false;
                         }
 
@@ -965,7 +965,7 @@ public class StreamSettings extends AppCompatActivity implements SettingsSection
 
                         return true;
                     } catch (NumberFormatException e) {
-                        Toast.makeText(getActivity(), getString(R.string.pref_error_occurred), Toast.LENGTH_SHORT).show();
+                        com.limelight.utils.PenumbraToast.makeText(getActivity(), getString(R.string.pref_error_occurred), Toast.LENGTH_SHORT).show();
                         return false;
                     }
                 });
@@ -981,14 +981,14 @@ public class StreamSettings extends AppCompatActivity implements SettingsSection
                 customRefreshRatePref.setOnPreferenceChangeListener((preference, newValue) -> {
                     String value = (String) newValue;
                     if (TextUtils.isEmpty(value)) {
-                        Toast.makeText(getActivity(), getString(R.string.pref_enter_value_0_9999), Toast.LENGTH_SHORT).show();
+                        com.limelight.utils.PenumbraToast.makeText(getActivity(), getString(R.string.pref_enter_value_0_9999), Toast.LENGTH_SHORT).show();
                         return false;
                     }
                     
                     try {
                         float refreshRate = Float.parseFloat(value);
                         if (refreshRate <= 0) {
-                            Toast.makeText(getActivity(), getString(R.string.pref_enter_value_0_9999), Toast.LENGTH_SHORT).show();
+                            com.limelight.utils.PenumbraToast.makeText(getActivity(), getString(R.string.pref_enter_value_0_9999), Toast.LENGTH_SHORT).show();
                             return false;
                         }
                         
@@ -1001,7 +1001,7 @@ public class StreamSettings extends AppCompatActivity implements SettingsSection
 
                         return true;
                     } catch (NumberFormatException e) {
-                        Toast.makeText(getActivity(), getString(R.string.pref_error_occurred), Toast.LENGTH_SHORT).show();
+                        com.limelight.utils.PenumbraToast.makeText(getActivity(), getString(R.string.pref_error_occurred), Toast.LENGTH_SHORT).show();
                         return false;
                     }
                 });
@@ -1053,7 +1053,7 @@ public class StreamSettings extends AppCompatActivity implements SettingsSection
                     Uri uri = data.getData();
                     String json = FileUriUtils.openUriForRead(getActivity(), uri);
                     if (TextUtils.isEmpty(json)) {
-                        Toast.makeText(getActivity(), getString(R.string.pref_empty_file), Toast.LENGTH_SHORT).show();
+                        com.limelight.utils.PenumbraToast.makeText(getActivity(), getString(R.string.pref_empty_file), Toast.LENGTH_SHORT).show();
                         return;
                     }
                     String name = getPrefs().getString(KeyBoardControllerConfigurationLoader.OSC_PREFERENCE, KeyBoardControllerConfigurationLoader.OSC_PREFERENCE_VALUE);
@@ -1067,10 +1067,10 @@ public class StreamSettings extends AppCompatActivity implements SettingsSection
                         prefEditor.putString(key, value);
                     }
                     prefEditor.apply();
-                    Toast.makeText(getActivity(), getString(R.string.pref_import_success), Toast.LENGTH_SHORT).show();
+                    com.limelight.utils.PenumbraToast.makeText(getActivity(), getString(R.string.pref_import_success), Toast.LENGTH_SHORT).show();
                 } catch (Exception e) {
                     e.printStackTrace();
-                    Toast.makeText(getActivity(), getString(R.string.pref_error_occurred) + e.getMessage(), Toast.LENGTH_SHORT).show();
+                    com.limelight.utils.PenumbraToast.makeText(getActivity(), getString(R.string.pref_error_occurred) + e.getMessage(), Toast.LENGTH_SHORT).show();
                 }
                 return;
             }
@@ -1080,16 +1080,16 @@ public class StreamSettings extends AppCompatActivity implements SettingsSection
                     Uri uri = data.getData();
                     String json = FileUriUtils.openUriForRead(getActivity(), uri);
                     if (TextUtils.isEmpty(json)) {
-                        Toast.makeText(getActivity(), getString(R.string.pref_empty_file), Toast.LENGTH_SHORT).show();
+                        com.limelight.utils.PenumbraToast.makeText(getActivity(), getString(R.string.pref_empty_file), Toast.LENGTH_SHORT).show();
                         return;
                     }
                     SharedPreferences.Editor prefEditor = getActivity().getSharedPreferences(GameMenu.PREF_NAME, Activity.MODE_PRIVATE).edit();
                     prefEditor.putString(GameMenu.KEY_NAME, json);
                     prefEditor.apply();
-                    Toast.makeText(getActivity(), getString(R.string.pref_import_success), Toast.LENGTH_SHORT).show();
+                    com.limelight.utils.PenumbraToast.makeText(getActivity(), getString(R.string.pref_import_success), Toast.LENGTH_SHORT).show();
                 } catch (Exception e) {
                     e.printStackTrace();
-                    Toast.makeText(getActivity(), getString(R.string.pref_error_occurred) + e.getMessage(), Toast.LENGTH_SHORT).show();
+                    com.limelight.utils.PenumbraToast.makeText(getActivity(), getString(R.string.pref_error_occurred) + e.getMessage(), Toast.LENGTH_SHORT).show();
                 }
             }
         }

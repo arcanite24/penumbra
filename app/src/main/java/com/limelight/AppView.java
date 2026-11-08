@@ -234,7 +234,7 @@ public class AppView extends AppCompatActivity implements HomeAppAdapter.Listene
                         @Override
                         public void run() {
                             // Display a toast to the user and quit the activity
-                            Toast.makeText(AppView.this, R.string.lost_connection, Toast.LENGTH_SHORT).show();
+                            com.limelight.utils.PenumbraToast.makeText(AppView.this, R.string.lost_connection, Toast.LENGTH_SHORT).show();
                             finish();
                         }
                     });
@@ -252,7 +252,7 @@ public class AppView extends AppCompatActivity implements HomeAppAdapter.Listene
                                     getResources().getString(R.string.scut_not_paired));
 
                             // Display a toast to the user and quit the activity
-                            Toast.makeText(AppView.this, R.string.scut_not_paired, Toast.LENGTH_SHORT).show();
+                            com.limelight.utils.PenumbraToast.makeText(AppView.this, R.string.scut_not_paired, Toast.LENGTH_SHORT).show();
                             finish();
                         }
                     });
@@ -465,7 +465,7 @@ public class AppView extends AppCompatActivity implements HomeAppAdapter.Listene
                 ShortcutHelper.artFileContentToExport = null;
                 // Show "File export cancelled." toast only if the user explicitly cancelled.
                 if (resultCode == Activity.RESULT_CANCELED) {
-                    Toast.makeText(this, R.string.file_export_cancelled, Toast.LENGTH_SHORT).show();
+                    com.limelight.utils.PenumbraToast.makeText(this, R.string.file_export_cancelled, Toast.LENGTH_SHORT).show();
                 }
             }
         }
@@ -630,7 +630,7 @@ public class AppView extends AppCompatActivity implements HomeAppAdapter.Listene
                 ImageView appImageView = menuTargetView.findViewById(R.id.grid_image);
                 Bitmap appBits = ((BitmapDrawable) appImageView.getDrawable()).getBitmap();
                 if (!shortcutHelper.createPinnedGameShortcut(computer, app.app, appBits)) {
-                    Toast.makeText(AppView.this, getResources().getString(R.string.unable_to_pin_shortcut), Toast.LENGTH_LONG).show();
+                    com.limelight.utils.PenumbraToast.makeText(AppView.this, getResources().getString(R.string.unable_to_pin_shortcut), Toast.LENGTH_LONG).show();
                 }
                 return true;
             }

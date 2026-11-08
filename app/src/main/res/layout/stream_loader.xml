@@ -1,0 +1,135 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Penumbra stream launch screen (PEN-3), replaces the black screen + spinner -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/loaderRoot"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#050418">
+
+    <com.limelight.ui.EclipseBackgroundView
+        android:id="@+id/loaderEclipse"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <ImageView
+        android:id="@+id/loaderBackdrop"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:alpha="0"
+        android:importantForAccessibility="no"
+        android:scaleType="centerCrop" />
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@drawable/home_scrim" />
+
+    <LinearLayout
+        android:id="@+id/loaderContent"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:gravity="center"
+        android:orientation="horizontal"
+        android:paddingStart="56dp"
+        android:paddingEnd="56dp">
+
+        <FrameLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content">
+
+            <com.limelight.ui.OrbitLoaderView
+                android:id="@+id/loaderOrbit"
+                android:layout_width="250dp"
+                android:layout_height="250dp"
+                android:layout_gravity="center" />
+
+            <androidx.cardview.widget.CardView
+                android:id="@+id/loaderCoverCard"
+                android:layout_width="120dp"
+                android:layout_height="160dp"
+                android:layout_gravity="center"
+                android:visibility="gone"
+                app:cardBackgroundColor="#1A1640"
+                app:cardCornerRadius="16dp"
+                app:cardElevation="12dp">
+
+                <ImageView
+                    android:id="@+id/loaderCover"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:importantForAccessibility="no"
+                    android:scaleType="centerCrop" />
+            </androidx.cardview.widget.CardView>
+        </FrameLayout>
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="28dp"
+            android:layout_weight="1"
+            android:maxWidth="440dp"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/loaderEyebrow"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:fontFamily="sans-serif-medium"
+                android:letterSpacing="0.2"
+                android:text="@string/loader_eyebrow"
+                android:textColor="#6FE7FF"
+                android:textSize="12sp" />
+
+            <TextView
+                android:id="@+id/loaderTitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:ellipsize="end"
+                android:fontFamily="sans-serif-medium"
+                android:maxLines="2"
+                android:shadowColor="#AA6A4BFF"
+                android:shadowRadius="18"
+                android:textColor="#FFFFFF"
+                android:textSize="34sp" />
+
+            <TextView
+                android:id="@+id/loaderSubtitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:textColor="#B3E8E6FF"
+                android:textSize="15sp" />
+
+            <com.limelight.ui.LoaderProgressView
+                android:id="@+id/loaderProgress"
+                android:layout_width="280dp"
+                android:layout_height="4dp"
+                android:layout_marginTop="22dp" />
+
+            <TextView
+                android:id="@+id/loaderStatus"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:textColor="#D9E8E6FF"
+                android:textSize="14sp" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/loaderHints"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|end"
+        android:layout_marginEnd="28dp"
+        android:layout_marginBottom="20dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <TextView style="@style/HomeHintBadge" android:text="B" tools:ignore="HardcodedText" />
+        <TextView style="@style/HomeHintLabel" android:text="@string/cancel" />
+    </LinearLayout>
+</FrameLayout>

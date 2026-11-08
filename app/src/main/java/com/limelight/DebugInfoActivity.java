@@ -107,7 +107,7 @@ public class DebugInfoActivity extends AppCompatActivity implements View.OnClick
         // Gamepad Vibration
         if (v.getId() == R.id.bt_vibrator_gamepad) {
             if (ids.isEmpty()) {
-                Toast.makeText(DebugInfoActivity.this, getString(R.string.debug_info_no_gamepad_detected), Toast.LENGTH_LONG).show();
+                com.limelight.utils.PenumbraToast.makeText(DebugInfoActivity.this, getString(R.string.debug_info_no_gamepad_detected), Toast.LENGTH_LONG).show();
                 return;
             }
             String[] strings = new String[ids.size()];
@@ -137,7 +137,7 @@ public class DebugInfoActivity extends AppCompatActivity implements View.OnClick
                             }
                         }).setTitle(getString(R.string.debug_info_please_choose)).create().show();
                     } else {
-                        Toast.makeText(DebugInfoActivity.this, getString(R.string.debug_info_no_vibrator), Toast.LENGTH_SHORT).show();
+                        com.limelight.utils.PenumbraToast.makeText(DebugInfoActivity.this, getString(R.string.debug_info_no_vibrator), Toast.LENGTH_SHORT).show();
                     }
                 }
             }).setTitle(getString(R.string.debug_info_please_choose)).create().show();

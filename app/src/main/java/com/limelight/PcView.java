@@ -212,6 +212,7 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
+
         // Assume we're in the foreground when created to avoid a race
         // between binding to CMS and onResume()
         inForeground = true;
@@ -470,15 +471,15 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
 
     private void doPair(final ComputerDetails computer, String otp, String passphrase) {
         if (computer.state == ComputerDetails.State.OFFLINE || computer.activeAddress == null) {
-            Toast.makeText(PcView.this, getResources().getString(R.string.pair_pc_offline), Toast.LENGTH_SHORT).show();
+            com.limelight.utils.PenumbraToast.makeText(PcView.this, getResources().getString(R.string.pair_pc_offline), Toast.LENGTH_SHORT).show();
             return;
         }
         if (managerBinder == null) {
-            Toast.makeText(PcView.this, getResources().getString(R.string.error_manager_not_running), Toast.LENGTH_LONG).show();
+            com.limelight.utils.PenumbraToast.makeText(PcView.this, getResources().getString(R.string.error_manager_not_running), Toast.LENGTH_LONG).show();
             return;
         }
 
-        Toast.makeText(PcView.this, getResources().getString(R.string.pairing), Toast.LENGTH_SHORT).show();
+        com.limelight.utils.PenumbraToast.makeText(PcView.this, getResources().getString(R.string.pairing), Toast.LENGTH_SHORT).show();
         new Thread(new Runnable() {
             @Override
             public void run() {
@@ -565,7 +566,7 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
                     @Override
                     public void run() {
                         if (toastMessage != null) {
-                            Toast.makeText(PcView.this, toastMessage, Toast.LENGTH_LONG).show();
+                            com.limelight.utils.PenumbraToast.makeText(PcView.this, toastMessage, Toast.LENGTH_LONG).show();
                         }
 
                         if (toastSuccess) {
@@ -615,11 +616,11 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
             String pin = otpInput.getText().toString();
             String passphrase = passphraseInput.getText().toString();
             if (pin.length() != 4) {
-                Toast.makeText(context, getString(R.string.pair_pin_length_msg), Toast.LENGTH_SHORT).show();
+                com.limelight.utils.PenumbraToast.makeText(context, getString(R.string.pair_pin_length_msg), Toast.LENGTH_SHORT).show();
                 return;
             }
             if (passphrase.length() < 4 ) {
-                Toast.makeText(context, getString(R.string.pair_passphrase_length_msg), Toast.LENGTH_SHORT).show();
+                com.limelight.utils.PenumbraToast.makeText(context, getString(R.string.pair_passphrase_length_msg), Toast.LENGTH_SHORT).show();
                 return;
             }
             doPair(computer, pin, passphrase);
@@ -629,12 +630,12 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
 
     private void doWakeOnLan(final ComputerDetails computer) {
         if (computer.state == ComputerDetails.State.ONLINE) {
-            Toast.makeText(PcView.this, getResources().getString(R.string.wol_pc_online), Toast.LENGTH_SHORT).show();
+            com.limelight.utils.PenumbraToast.makeText(PcView.this, getResources().getString(R.string.wol_pc_online), Toast.LENGTH_SHORT).show();
             return;
         }
 
         if (computer.macAddress == null) {
-            Toast.makeText(PcView.this, getResources().getString(R.string.wol_no_mac), Toast.LENGTH_SHORT).show();
+            com.limelight.utils.PenumbraToast.makeText(PcView.this, getResources().getString(R.string.wol_no_mac), Toast.LENGTH_SHORT).show();
             return;
         }
 
@@ -653,7 +654,7 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
                 runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
-                        Toast.makeText(PcView.this, toastMessage, Toast.LENGTH_LONG).show();
+                        com.limelight.utils.PenumbraToast.makeText(PcView.this, toastMessage, Toast.LENGTH_LONG).show();
                     }
                 });
             }
@@ -662,15 +663,15 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
 
     private void doUnpair(final ComputerDetails computer) {
         if (computer.state == ComputerDetails.State.OFFLINE || computer.activeAddress == null) {
-            Toast.makeText(PcView.this, getResources().getString(R.string.error_pc_offline), Toast.LENGTH_SHORT).show();
+            com.limelight.utils.PenumbraToast.makeText(PcView.this, getResources().getString(R.string.error_pc_offline), Toast.LENGTH_SHORT).show();
             return;
         }
         if (managerBinder == null) {
-            Toast.makeText(PcView.this, getResources().getString(R.string.error_manager_not_running), Toast.LENGTH_LONG).show();
+            com.limelight.utils.PenumbraToast.makeText(PcView.this, getResources().getString(R.string.error_manager_not_running), Toast.LENGTH_LONG).show();
             return;
         }
 
-        Toast.makeText(PcView.this, getResources().getString(R.string.unpairing), Toast.LENGTH_SHORT).show();
+        com.limelight.utils.PenumbraToast.makeText(PcView.this, getResources().getString(R.string.unpairing), Toast.LENGTH_SHORT).show();
         new Thread(new Runnable() {
             @Override
             public void run() {
@@ -705,7 +706,7 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
                 runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
-                        Toast.makeText(PcView.this, toastMessage, Toast.LENGTH_LONG).show();
+                        com.limelight.utils.PenumbraToast.makeText(PcView.this, toastMessage, Toast.LENGTH_LONG).show();
                     }
                 });
             }
@@ -714,11 +715,11 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
 
     private void doAppList(ComputerDetails computer, boolean newlyPaired, boolean showHiddenGames) {
         if (computer.state == ComputerDetails.State.OFFLINE) {
-            Toast.makeText(PcView.this, getResources().getString(R.string.error_pc_offline), Toast.LENGTH_SHORT).show();
+            com.limelight.utils.PenumbraToast.makeText(PcView.this, getResources().getString(R.string.error_pc_offline), Toast.LENGTH_SHORT).show();
             return;
         }
         if (managerBinder == null) {
-            Toast.makeText(PcView.this, getResources().getString(R.string.error_manager_not_running), Toast.LENGTH_LONG).show();
+            com.limelight.utils.PenumbraToast.makeText(PcView.this, getResources().getString(R.string.error_manager_not_running), Toast.LENGTH_LONG).show();
             return;
         }
 
@@ -760,7 +761,7 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
                     @Override
                     public void run() {
                         if (managerBinder == null) {
-                            Toast.makeText(PcView.this, getResources().getString(R.string.error_manager_not_running), Toast.LENGTH_LONG).show();
+                            com.limelight.utils.PenumbraToast.makeText(PcView.this, getResources().getString(R.string.error_manager_not_running), Toast.LENGTH_LONG).show();
                             return;
                         }
                         removeComputer(computer.details);
@@ -774,7 +775,7 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
 
             case RESUME_ID:
                 if (managerBinder == null) {
-                    Toast.makeText(PcView.this, getResources().getString(R.string.error_manager_not_running), Toast.LENGTH_LONG).show();
+                    com.limelight.utils.PenumbraToast.makeText(PcView.this, getResources().getString(R.string.error_manager_not_running), Toast.LENGTH_LONG).show();
                     return true;
                 }
 
@@ -783,7 +784,7 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
 
             case QUIT_ID:
                 if (managerBinder == null) {
-                    Toast.makeText(PcView.this, getResources().getString(R.string.error_manager_not_running), Toast.LENGTH_LONG).show();
+                    com.limelight.utils.PenumbraToast.makeText(PcView.this, getResources().getString(R.string.error_manager_not_running), Toast.LENGTH_LONG).show();
                     return true;
                 }
 
@@ -812,7 +813,7 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
             case OPEN_MANAGEMENT_PAGE_ID:
                 String managementUrl = computer.guessManagementUrl();
                 if (managementUrl == null) {
-                    Toast.makeText(PcView.this, getResources().getString(R.string.pcview_error_no_management_url), Toast.LENGTH_LONG).show();
+                    com.limelight.utils.PenumbraToast.makeText(PcView.this, getResources().getString(R.string.pcview_error_no_management_url), Toast.LENGTH_LONG).show();
                 } else {
                     HelpLauncher.launchUrl(PcView.this, managementUrl);
                 }

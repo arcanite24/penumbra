@@ -22,7 +22,7 @@ public class KeyboardAccessibilityService extends AccessibilityService {
     public boolean onKeyEvent(KeyEvent event) {
         int action = event.getAction();
         int keyCode = event.getKeyCode();
-//        Toast.makeText(getApplicationContext(),"scancode:"+event.getScanCode()+",code:"+event.getKeyCode(),Toast.LENGTH_LONG).show();
+//        com.limelight.utils.PenumbraToast.makeText(getApplicationContext(),"scancode:"+event.getScanCode()+",code:"+event.getKeyCode(),Toast.LENGTH_LONG).show();
         //主要解决系统自带快捷键在pc端无法使用问题 home键 scancode=172 code- 3
         if (Game.instance != null && Game.instance.connected && !BLACKLIST_KEYS.contains(keyCode)) {
 

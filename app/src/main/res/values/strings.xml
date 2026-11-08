@@ -803,6 +803,9 @@
     <!-- Penumbra: host asks to confirm closing the running app (Vibepollo 410) -->
     <string name="profile_use">Use</string>
     <string name="profile_in_use">In use</string>
+    <string name="loader_eyebrow">STARTING STREAM</string>
+    <string name="loader_on_host">on %1$s</string>
+    <string name="loader_connected">Connected</string>
     <string name="app_replace_title">Another app is running</string>
     <string name="app_replace_message">The host is still running another app. Close it and start %1$s?</string>
     <string name="app_replace_confirm">Close and start</string>

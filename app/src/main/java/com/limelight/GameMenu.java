@@ -281,7 +281,7 @@ public class GameMenu implements Game.GameMenuCallbacks {
                 }
             } catch (Exception e) {
                 e.printStackTrace();
-                Toast.makeText(game,getString(R.string.wrong_import_format),Toast.LENGTH_SHORT).show();
+                com.limelight.utils.PenumbraToast.makeText(game,getString(R.string.wrong_import_format),Toast.LENGTH_SHORT).show();
             }
         }
         options.add(new MenuOption(getString(R.string.game_menu_cancel), null));

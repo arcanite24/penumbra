@@ -48,7 +48,7 @@ public class ConfirmDeleteKeyboardPreference extends DialogPreference {
             if (positiveResult) {
                 String name= PreferenceManager.getDefaultSharedPreferences(getContext()).getString(OSC_PREFERENCE,OSC_PREFERENCE_VALUE);
                 getContext().getSharedPreferences(name, Context.MODE_PRIVATE).edit().clear().apply();
-                Toast.makeText(getContext(), R.string.toast_reset_osc_success, Toast.LENGTH_SHORT).show();
+                com.limelight.utils.PenumbraToast.makeText(getContext(), R.string.toast_reset_osc_success, Toast.LENGTH_SHORT).show();
             }
         }
     }

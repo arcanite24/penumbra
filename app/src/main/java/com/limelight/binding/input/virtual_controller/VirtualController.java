@@ -109,7 +109,7 @@ public class VirtualController {
                     message = context.getString(R.string.configuration_mode_exiting);
                 }
 
-                Toast.makeText(context, message, Toast.LENGTH_SHORT).show();
+                com.limelight.utils.PenumbraToast.makeText(context, message, Toast.LENGTH_SHORT).show();
 
                 buttonConfigure.invalidate();
 

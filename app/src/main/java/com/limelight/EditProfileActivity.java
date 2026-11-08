@@ -68,7 +68,7 @@ public class EditProfileActivity extends AppCompatActivity implements com.limeli
                 setTitle(getString(R.string.profile_manager_edit_profile) + currentProfile.getName());
                 inMemoryPrefs = new InMemorySharedPreferences(currentProfile.getOptions());
             } else {
-                Toast.makeText(this, R.string.profile_manager_profile_not_found, Toast.LENGTH_SHORT).show();
+                com.limelight.utils.PenumbraToast.makeText(this, R.string.profile_manager_profile_not_found, Toast.LENGTH_SHORT).show();
                 finish();
                 return;
             }
@@ -162,11 +162,11 @@ public class EditProfileActivity extends AppCompatActivity implements com.limeli
 
         if (ProfilesManager.getInstance().save(this)) {
             // Show confirmation Toast
-            Toast.makeText(this,
+            com.limelight.utils.PenumbraToast.makeText(this,
                     getString(R.string.profile_manager_profile_saved, displayName),
                     Toast.LENGTH_SHORT).show();
         } else {
-            Toast.makeText(this, R.string.profile_manager_failed_to_save, Toast.LENGTH_LONG).show();
+            com.limelight.utils.PenumbraToast.makeText(this, R.string.profile_manager_failed_to_save, Toast.LENGTH_LONG).show();
         }
 
         finish();
@@ -184,7 +184,7 @@ public class EditProfileActivity extends AppCompatActivity implements com.limeli
                 .setPositiveButton("OK", (dialog, which) -> {
                     String newName = input.getText().toString().trim();
                     if (newName.isEmpty()) {
-                        Toast.makeText(this, R.string.profile_manager_name_cannot_be_blank, Toast.LENGTH_SHORT).show();
+                        com.limelight.utils.PenumbraToast.makeText(this, R.string.profile_manager_name_cannot_be_blank, Toast.LENGTH_SHORT).show();
                         return;
                     }
 

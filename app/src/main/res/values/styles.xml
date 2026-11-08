@@ -37,6 +37,8 @@
 
     <!-- Stream activity theme -->
     <style name="StreamTheme" parent="StreamBaseTheme">
+        <item name="alertDialogTheme">@style/PenumbraDialog</item>
+        <item name="android:alertDialogTheme">@style/PenumbraDialog</item>
         <!-- All customizations that are NOT specific to a particular API-level can go here. -->
         <item name="android:windowActionBar">false</item>
         <item name="android:windowNoTitle">true</item>
@@ -163,6 +165,24 @@
         <item name="android:paddingEnd">22dp</item>
         <item name="android:textColor">#050418</item>
         <item name="android:textSize">14sp</item>
+    </style>
+
+    <style name="PenumbraSpinner" parent="android:Theme.Dialog">
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowIsFloating">true</item>
+        <item name="android:backgroundDimEnabled">true</item>
+        <item name="android:backgroundDimAmount">0.6</item>
+        <item name="android:windowAnimationStyle">@null</item>
+    </style>
+
+    <style name="PenumbraStreamLoader" parent="android:Theme.Dialog">
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowIsFloating">false</item>
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:windowAnimationStyle">@null</item>
     </style>
 
     <style name="PenumbraDialog" parent="Theme.AppCompat.Dialog.Alert">

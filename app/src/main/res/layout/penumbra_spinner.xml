@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Penumbra compact loader (PEN-3), replaces the stock ProgressDialog -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/spinnerPanel"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:background="@drawable/penumbra_dialog_bg"
+    android:gravity="center_vertical"
+    android:minWidth="340dp"
+    android:orientation="horizontal"
+    android:paddingStart="18dp"
+    android:paddingTop="16dp"
+    android:paddingEnd="26dp"
+    android:paddingBottom="16dp">
+
+    <com.limelight.ui.OrbitLoaderView
+        android:layout_width="64dp"
+        android:layout_height="64dp" />
+
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="16dp"
+        android:maxWidth="420dp"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/spinnerTitle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:fontFamily="sans-serif-medium"
+            android:maxWidth="420dp"
+            android:textColor="#FFFFFF"
+            android:textSize="18sp" />
+
+        <TextView
+            android:id="@+id/spinnerMessage"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:maxWidth="420dp"
+            android:textColor="#B3E8E6FF"
+            android:textSize="13sp" />
+    </LinearLayout>
+</LinearLayout>
