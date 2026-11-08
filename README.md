@@ -1,104 +1,100 @@
 <p align="center">
-  <img src="branding/penumbra-logo.png" alt="Penumbra logo" width="160">
+  <img src="branding/penumbra-logo.png" alt="Penumbra logo" width="140">
 </p>
 
 <h1 align="center">Penumbra</h1>
 
-<p align="center">A game-streaming client for <a href="https://github.com/ClassicOldSong/Apollo">Apollo</a>/<a href="https://github.com/LizardByte/Sunshine">Sunshine</a>, tuned for Android gaming handhelds.</p>
+<p align="center">
+  <b>Stream your PC games to an Android handheld, with a console-style UI built for controllers.</b><br>
+  A client for <a href="https://github.com/ClassicOldSong/Apollo">Apollo</a> / <a href="https://github.com/Nonary/Vibepollo">Vibepollo</a> / <a href="https://github.com/LizardByte/Sunshine">Sunshine</a>, forked from <a href="https://github.com/ClassicOldSong/moonlight-android">Artemis</a> and <a href="https://github.com/moonlight-stream/moonlight-android">Moonlight</a>.
+</p>
 
-Penumbra is a fork of [Artemis](https://github.com/ClassicOldSong/moonlight-android) (itself a fork of [Moonlight](https://github.com/moonlight-stream/moonlight-android)). It is built for Android handhelds such as the Retroid Pocket, AYN Odin/Thor and Ayaneo devices.
+<p align="center">
+  <img src="docs/ui-concepts/screenshots/home-tiles.png" alt="Penumbra home screen with game tiles" width="820">
+</p>
 
-## Goals
+## Why Penumbra
 
-- **Rendered frame rate matches the stream:** fix the drop where frames are presented below the incoming stream rate, and tighten frame pacing and the decode-to-display path.
-- **Tuned for handhelds:** defaults that suit handheld screens, controllers and thermals.
-- **New streaming features:** latency and quality improvements beyond upstream.
+Moonlight and Artemis are excellent streaming engines with a phone-era interface. Penumbra keeps their engine and puts it in an interface built for devices like the AYN Odin, AYN Thor, Retroid Pocket and Ayaneo handhelds:
 
-> Work in progress. Penumbra stays GPL-3.0 like its upstreams, and all credit for the base client goes to the Moonlight and Artemis authors.
+- **Controller first.** Every screen works with the D-pad and face buttons. A is select, B is back, Y is options. Focus is always visible, and the first press lands where you expect.
+- **Looks like it belongs on a console.** Animated eclipse backdrop, cover-art tiles, glass panels and soft motion throughout. The whole app runs fullscreen.
+- **Frame rate that matches the stream.** Artemis could present fewer frames than the host sent. Penumbra fixes that (see [What's changed](#whats-changed)).
+- **Fewer dead ends.** Switching games while another one is still running on the host now asks to close it, instead of failing with "error 410".
 
----
+## Screenshots
 
-## Upstream: Artemis Android
+| Choose a host | Launching a stream |
+|---|---|
+| ![Host picker](docs/ui-concepts/screenshots/hosts.png) | ![Stream launch screen](docs/ui-concepts/screenshots/stream-loader.png) |
+| **Settings** | **Profiles** |
+| ![Settings](docs/ui-concepts/screenshots/settings.png) | ![Profile editor](docs/ui-concepts/screenshots/profile-editor.png) |
 
-Previously named Moonlight Noir
+The game library has three layouts, set in **Settings → Interface → Home layout**: **Tiles** (large covers in a carousel), **Shelf** (a hero banner over a cover row) and **Grid** (the whole library at once).
 
-An open source client for [Apollo](https://github.com/ClassicOldSong/Apollo)/[Sunshine](https://github.com/LizardByte/Sunshine).
+![Shelf layout](docs/ui-concepts/screenshots/home-shelf.png)
 
-Artemis Android will allow you to stream your collection of games from your Windows PC to your Android device,
-whether in your own home or over the internet.
+## What's changed
 
-Artemis is currently the best fork of Moonlight with loads of optimizations for office usage.
+Compared with Artemis:
 
-A more seamless experience with virtual display will be Artemis paired with [Apollo](https://github.com/ClassicOldSong/Apollo).
+**Streaming**
+- **Rendered FPS fix:** an inverted "latest frame only" fast path ran by default. It bypassed the chosen frame pacing mode and dropped decoded frames, so 60 fps streams could render well below 60. Penumbra removes it, keeps the newest frame in every pacing mode, drains the decoder without blocking, and respects your frame pacing setting.
+- **App switching (HTTP 410):** when the host is already running another app, Apollo/Vibepollo asks the client to confirm the switch. Penumbra shows a "Close and start" dialog and relaunches within the host's 60-second window.
 
-# Features
+**Interface**
+- New home screen with game art, a hero area for the selected game, and the three layouts above.
+- New host picker with live status for each host (online, offline, not paired).
+- Settings split into ten sections (Stream, Audio, Controllers, Mouse & keyboard, Touch controls, Host & clipboard, Interface, Overlay, Advanced, About), shown in a side rail with the chosen section beside it. Rows show their current values, such as "1080p" or "20 Mbps".
+- Profiles and the profile editor use the same rail layout.
+- A full-screen launch screen while a stream connects: blurred cover art, an orbiting eclipse loader, live connection steps, and **B** to cancel.
+- Restyled in-stream menu, loaders, toasts and dialogs.
 
-If you switch back to the main stream version, you'll be missing the following awesome features which are very unlikely to be added there:
+Everything Artemis added on top of Moonlight is still here: custom virtual buttons and gamepad skins, custom resolutions and bitrates, mouse modes and trackpad support, the in-game back menu, server commands, clipboard sync, Apollo virtual display integration, external display mode, view pan/zoom, Fit/Fill/Stretch scaling, and more. See the [Artemis README](https://github.com/ClassicOldSong/moonlight-android#features) for the full list.
 
-1. Custom virtual buttons with import and export support.
-2. [Custom resolutions](https://github.com/moonlight-stream/moonlight-android/pull/1349).
-3. Custom bitrates.
-4. [Multiple mouse mode switching](https://github.com/moonlight-stream/moonlight-android/pull/1304) (normal mouse, [multi-touch](https://github.com/moonlight-stream/moonlight-android/pull/1364), touchpad, disabled, local cursor mode).
-5. Optimized virtual gamepad skins and free joystick.
-6. External monitor mode.
-7. Joycon D-pad support.
-8. Simplified performance information display.
-9. [Game back menu](https://github.com/moonlight-stream/moonlight-android/pull/1171).
-10. Custom shortcut commands.
-11. Easy soft keyboard switching.
-12. Portrait mode.
-13. Display on top mode, useful for foldable phones.
-14. [Virtual touchpad space and sensitivity adjustment](https://github.com/moonlight-stream/moonlight-android/issues/1348#issuecomment-2236344729) for playing right-click view games, such as Warcraft.
-15. Force use device's own vibration motor (in case your gamepad's vibration is not effective).
-16. Gamepad debugging page to view gamepad vibration and gyroscope information, as well as Android kernel version information.
-17. Trackpad tap/scrolling support
-18. Natural track pad mode with touch screen
-19. Non-QWERTY keyboard layout support
-20. Quick Meta key with physical BACK button
-21. Frame rate lock fix for some devices
-22. Video scale mode: Fit/Fill/Stretch
-23. View pan/zoom support
-24. Rotate screen in-game
-25. Add option to quit app directly
-26. Samsung DeX scrolling support
-27. Proper click/scroll/right-click for trackpad on generic Android tablet when using local cursor
-28. Virtual Display integration with [Apollo](https://github.com/ClassicOldSong/Apollo)
-29. Server Command integration with [Apollo](https://github.com/ClassicOldSong/Apollo)
-30. Clipboard sync (requires Apollo)
-31. SBS 3D for external Displays (Using AI MiDaS v2 Lite)
+## Getting started
 
-# Disclaimer
+1. **Set up a host.** Install [Apollo](https://github.com/ClassicOldSong/Apollo) or [Vibepollo](https://github.com/Nonary/Vibepollo) on your Windows PC. Plain Sunshine also works, without virtual display and the other Apollo-only features.
+2. **Install Penumbra** on your handheld (see [Download](#download)).
+3. **Pair.** Hosts on your network appear automatically. Select one and enter the PIN in the host's web UI. If a host doesn't appear, choose **Add host** and type its IP address.
+4. **Play.** Pick a game and press **A**. Press **Y** on a game for options such as quitting the session or hiding it.
 
-This is the `go away` version of Moonlight Android.
+Tips for handhelds:
+- Match the stream to your screen: on a 1080p 60 Hz handheld, use 1080p at 60 FPS. The resolution list includes your display's native mode.
+- On the Odin 2 and other Snapdragon handhelds, start with HEVC or Auto codec and about 20–40 Mbps over Wi-Fi 6.
+- Use **Profiles** for different setups, for example a battery-saver profile and a docked profile.
 
-I got kicked from Moonlight and Sunshine's Discord server literally for helping people out.
+## Download
 
-This is what I got for finding a bug, opened an issue, getting no response, troubleshoot myself, fixed the issue myself, shared it by PR to the main repo hoping my efforts can help someone else during the maintainance gap.
-
-Yes, I'm going away. Fixes and improvements on this fork are not necessarily be merged to the main repo either. I have also started [a fork of Sunshine called Apollo](https://github.com/ClassicOldSong/Apollo) and will add useful features that will never get merged by the main repo shortly. [Apollo](https://github.com/ClassicOldSong/Apollo) and [Moonlight Noir](https://github.com/ClassicOldSong/moonlight-android) will no longer be compatible with OG Sunshine and OG Moonlight eventually, but they'll work even better with much more carefully designed features.
-
-The main repo had stayed silent for 5 months, with nobody actually responding to issues, and people are getting totally no help besides the limited FAQ in their Discord server. I tried to answer issues and questions, solve problems within my ablilty but I got kicked out just for helping others.
-
-**PRs for feature improvements are welcomed here unlike the main repo, your ideas are more likely to be appreciated and your efforts are actually being respected. We welcome people who can and willing to share their efforts, helping yourselves and other people in need.**
-
-**Update**: They have contacted me and apologized for this incident, but the fact it **happened** still motivated me to start my own fork.
-
-## Downloads
-* [Download APK directly](https://github.com/ClassicOldSong/moonlight-android/releases)
-* [Use Obtainium](https://apps.obtainium.imranr.dev/redirect?r=obtainium://app/%7B%22id%22%3A%22com.limelight.noir%22%2C%22url%22%3A%22https%3A%2F%2Fgithub.com%2FClassicOldSong%2Fmoonlight-android%22%2C%22author%22%3A%22ClassicOldSong%22%2C%22name%22%3A%22Artemis%22%2C%22additionalSettings%22%3A%22%7B%5C%22apkFilterRegEx%5C%22%3A%5C%22nonRoot%5C%22%2C%5C%22matchGroutToUse%5C%22%3A%5C%22%241%5C%22%2C%5C%22versionExtractionRegEx%5C%22%3A%5C%22v(.%2B)%5C%22%7D%22%7D) (recommended)
+There are no releases yet. Build from source (below) for now. Once releases are published, they will be on the [Releases page](https://github.com/arcanite24/penumbra/releases), and [Obtainium](https://github.com/ImranR98/Obtainium) can track the `nonRoot` APK.
 
 ## Building
-* Install Android Studio and the Android NDK
-* Run ‘git submodule update --init --recursive’ from within moonlight-android/
-* In moonlight-android/, create a file called ‘local.properties’. Add an ‘ndk.dir=’ property to the local.properties file and set it equal to your NDK directory.
-* Build the APK using Android Studio or gradle
 
-## Authors
+Requirements: Android Studio (or JDK 17 plus the Android SDK) and the Android NDK.
 
-* [Cameron Gutman](https://github.com/cgutman)  
-* [Diego Waxemberg](https://github.com/dwaxemberg)  
-* [Aaron Neyer](https://github.com/Aaronneyer)  
-* [Andrew Hennessy](https://github.com/yetanothername)
+```bash
+git clone --recursive https://github.com/arcanite24/penumbra.git
+cd penumbra
+```
 
-Moonlight is the work of students at [Case Western](http://case.edu) and was
-started as a project at [MHacks](http://mhacks.org).
+Point `local.properties` at your SDK, and at your NDK with `ndk.dir=` if Android Studio doesn't manage it. Then build the standard (non-root) debug APK:
+
+```bash
+./gradlew assembleNonRoot_gameDebug
+```
+
+The APK is written to `app/build/outputs/apk/nonRoot_game/debug/`. The debug build installs as `io.github.arcanite24.penumbra.debug`, alongside a release install. The `root` flavor adds input features that need a rooted device.
+
+## Project status
+
+Penumbra is a personal project under active development and a work in progress. Expect rough edges, and file an issue if something breaks. Planned work includes deeper latency tuning for Snapdragon handhelds and more handheld-specific presets.
+
+## Credits and license
+
+Penumbra is GPL-3.0, like its upstreams. Almost all of the streaming engine comes from others:
+
+- [Moonlight](https://github.com/moonlight-stream/moonlight-android) by Cameron Gutman, Diego Waxemberg, Aaron Neyer, Andrew Hennessy and contributors. It began as a student project at Case Western at MHacks.
+- [Artemis](https://github.com/ClassicOldSong/moonlight-android) (formerly Moonlight Noir) by ClassicOldSong and contributors. It added most of the advanced features listed above.
+- [Apollo](https://github.com/ClassicOldSong/Apollo) and [Vibepollo](https://github.com/Nonary/Vibepollo) on the host side.
+
+See [LICENSE.txt](LICENSE.txt).
