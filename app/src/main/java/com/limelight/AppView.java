@@ -337,6 +337,15 @@ public class AppView extends AppCompatActivity implements HomeAppAdapter.Listene
 
         setupHomeShell();
 
+        // Setup wizard (PEN-8)
+        findViewById(R.id.tuneButton).setOnClickListener(v -> {
+            Intent tune = new Intent(this, com.limelight.wizard.SetupWizardActivity.class);
+            tune.putExtra(com.limelight.wizard.SetupWizardActivity.EXTRA_PC_UUID, uuidString);
+            tune.putExtra(com.limelight.wizard.SetupWizardActivity.EXTRA_PC_NAME,
+                    computer != null ? computer.name : getIntent().getStringExtra(NAME_EXTRA));
+            startActivity(tune);
+        });
+
         showHiddenApps = getIntent().getBooleanExtra(SHOW_HIDDEN_APPS_EXTRA, false);
         uuidString = getIntent().getStringExtra(UUID_EXTRA);
 

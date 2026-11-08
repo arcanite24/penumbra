@@ -96,9 +96,15 @@
                 android:layout_weight="1" />
 
             <TextView
-                android:id="@+id/profilesButton"
+                android:id="@+id/tuneButton"
                 style="@style/HomeChip"
                 android:layout_marginStart="14dp"
+                android:contentDescription="@string/wizard_title"
+                android:text="@string/home_tune" />
+
+            <TextView
+                android:id="@+id/profilesButton"
+                style="@style/HomeChip"
                 android:contentDescription="@string/profile_manager_choose_profile"
                 android:drawablePadding="6dp"
                 android:text="@string/home_profiles" />

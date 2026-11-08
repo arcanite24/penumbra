@@ -269,6 +269,28 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     public static final String EXTRA_SERVER_COMMANDS = "ServerCommands";
     public static final String EXTRA_DISPLAY_ID = "DisplayID";
 
+    // Setup wizard trial streams (PEN-8). EXTRA_PROBE_OVERRIDES is a Bundle of preference
+    // values applied on top of the user's settings for this stream only. The stream is
+    // measured, the host app is quit, and the numbers come back as the activity result.
+    public static final String EXTRA_PROBE_OVERRIDES = "ProbeOverrides";
+    public static final String EXTRA_PROBE_WARMUP_MS = "ProbeWarmupMs";
+    public static final String EXTRA_PROBE_MEASURE_MS = "ProbeMeasureMs";
+    public static final String RESULT_PROBE_RECEIVED_FPS = "ProbeReceivedFps";
+    public static final String RESULT_PROBE_RENDERED_FPS = "ProbeRenderedFps";
+    public static final String RESULT_PROBE_TOTAL_FPS = "ProbeTotalFps";
+    public static final String RESULT_PROBE_DECODE_MS = "ProbeDecodeMs";
+    public static final String RESULT_PROBE_LOSS_PCT = "ProbeLossPct";
+    public static final String RESULT_PROBE_RTT_MS = "ProbeRttMs";
+    public static final String RESULT_PROBE_RTT_VAR_MS = "ProbeRttVarMs";
+    public static final String RESULT_PROBE_DECODER = "ProbeDecoder";
+    public static final String RESULT_PROBE_HDR = "ProbeHdr";
+    public static final String RESULT_PROBE_ERROR = "ProbeError";
+    public static final String RESULT_PROBE_MBPS = "ProbeMbps";
+    // Result code when a trial stream failed on its own (as opposed to the user backing out)
+    public static final int RESULT_PROBE_FAILED = RESULT_FIRST_USER;
+    private boolean probeMode = false;
+    private java.util.Map<String, Object> probeOverrides;
+
     public static final String CLIPBOARD_IDENTIFIER = "ArtemisStreaming";
 
     private String appUUID;
@@ -350,6 +372,20 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
         // We don't want a title bar
         requestWindowFeature(Window.FEATURE_NO_TITLE);
+
+        // Setup wizard trial stream: overlay the test values before reading preferences
+        Bundle probeOverrides = getIntent().getBundleExtra(EXTRA_PROBE_OVERRIDES);
+        if (probeOverrides != null) {
+            java.util.Map<String, Object> overrides = new java.util.HashMap<>();
+            for (String key : probeOverrides.keySet()) {
+                overrides.put(key, probeOverrides.get(key));
+            }
+            ProfilesManager.getInstance().setTransientOverrides(overrides);
+            this.probeOverrides = overrides;
+            probeMode = true;
+            // A test replaces whatever the host is running without asking (error 410)
+            confirmedAppReplacement = true;
+        }
 
         // Read the stream preferences
         prefConfig = PreferenceConfiguration.readPreferences(this);
@@ -1709,6 +1745,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     @Override
     protected void onDestroy() {
         super.onDestroy();
+
+        if (probeMode) {
+            ProfilesManager.getInstance().clearTransientOverrides(probeOverrides);
+        }
 
         instance = null;
         timerHandler.removeCallbacksAndMessages(null);
@@ -3481,6 +3521,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                         try {
                             sleep(1000);
                             httpConn.quitApp();
+                            if (probeMode) {
+                                return;
+                            }
                             Game.this.runOnUiThread(() -> com.limelight.utils.PenumbraToast.makeText(Game.this, Game.this.getResources().getString(R.string.applist_quit_success) + " " + appName, Toast.LENGTH_LONG).show());
                         } catch (Exception e) {
                             Game.this.runOnUiThread(() -> com.limelight.utils.PenumbraToast.makeText(Game.this, e.getMessage(), Toast.LENGTH_LONG).show());
@@ -3584,6 +3627,12 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                         dialogText += "\n\n" + getResources().getString(R.string.nettest_text_blocked);
                     }
 
+                    if (probeMode) {
+                        // The wizard reports and retries; no dialog to dismiss
+                        setResult(RESULT_PROBE_FAILED, new Intent().putExtra(RESULT_PROBE_ERROR, stage + " (error " + errorCode + ")"));
+                        finish();
+                        return;
+                    }
                     Dialog.displayDialog(Game.this, getResources().getString(R.string.conn_error_title), dialogText, true);
                     finishSecondScreen();
                 }
@@ -3679,6 +3728,11 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                                     MoonBridge.stringifyPortFlags(portFlags, "\n");
                         }
 
+                        if (probeMode) {
+                            setResult(RESULT_PROBE_FAILED, new Intent().putExtra(RESULT_PROBE_ERROR, "Connection lost (error " + errorCode + ")"));
+                            finish();
+                            return;
+                        }
                         Dialog.displayDialog(Game.this, getResources().getString(R.string.conn_terminated_title),
                                 message, true);
                     }
@@ -3762,6 +3816,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
                 if (prefConfig.preventPacketLoss) {
                     timerHandler.postDelayed(backgroundPing, 1000);
+                }
+
+                if (probeMode) {
+                    startProbeMeasurement();
                 }
             }
         });
@@ -4271,6 +4329,67 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     //切换触控灵敏度开关
     public void switchTouchSensitivity(){
         prefConfig.enableTouchSensitivity = !prefConfig.enableTouchSensitivity;
+    }
+
+    private void startProbeMeasurement() {
+        final int warmupMs = getIntent().getIntExtra(EXTRA_PROBE_WARMUP_MS, 4000);
+        final int measureMs = getIntent().getIntExtra(EXTRA_PROBE_MEASURE_MS, 8000);
+        timerHandler.postDelayed(() -> {
+            if (decoderRenderer == null || !connected) {
+                return;
+            }
+            final long[] start = decoderRenderer.getProbeCounters();
+            final long rxStart = com.limelight.utils.TrafficStatsHelper.getPackageRxBytes(android.os.Process.myUid());
+            final long rxStartMs = android.os.SystemClock.uptimeMillis();
+            final long[] rtt = new long[3]; // sum, variance sum, samples
+            final Runnable sampler = new Runnable() {
+                @Override
+                public void run() {
+                    long info = MoonBridge.getEstimatedRttInfo();
+                    if (info != -1 && info != 0) {
+                        rtt[0] += info >> 32;
+                        rtt[1] += info & 0xFFFFFFFFL;
+                        rtt[2]++;
+                    }
+                    timerHandler.postDelayed(this, 500);
+                }
+            };
+            timerHandler.post(sampler);
+            timerHandler.postDelayed(() -> {
+                timerHandler.removeCallbacks(sampler);
+                if (decoderRenderer == null || !connected) {
+                    return;
+                }
+                long[] end = decoderRenderer.getProbeCounters();
+                long rxEnd = com.limelight.utils.TrafficStatsHelper.getPackageRxBytes(android.os.Process.myUid());
+                long rxMs = android.os.SystemClock.uptimeMillis() - rxStartMs;
+                long elapsedMs = end[5] - start[5];
+                long received = end[1] - start[1];
+                Intent data = new Intent();
+                if (elapsedMs > 0) {
+                    float seconds = elapsedMs / 1000f;
+                    long total = end[3] - start[3];
+                    data.putExtra(RESULT_PROBE_RECEIVED_FPS, received / seconds);
+                    data.putExtra(RESULT_PROBE_RENDERED_FPS, (end[2] - start[2]) / seconds);
+                    data.putExtra(RESULT_PROBE_TOTAL_FPS, total / seconds);
+                    data.putExtra(RESULT_PROBE_DECODE_MS, received > 0 ? (float) (end[0] - start[0]) / received : 0f);
+                    data.putExtra(RESULT_PROBE_LOSS_PCT, total > 0 ? (end[4] - start[4]) * 100f / total : 0f);
+                }
+                if (rtt[2] > 0) {
+                    data.putExtra(RESULT_PROBE_RTT_MS, (float) rtt[0] / rtt[2]);
+                    data.putExtra(RESULT_PROBE_RTT_VAR_MS, (float) rtt[1] / rtt[2]);
+                }
+                if (rxStart >= 0 && rxEnd > rxStart && rxMs > 0) {
+                    // What the link actually carried; low-motion content uses far less than the target
+                    data.putExtra(RESULT_PROBE_MBPS, (rxEnd - rxStart) * 8f / 1000f / rxMs);
+                }
+                data.putExtra(RESULT_PROBE_DECODER, decoderRenderer.getActiveDecoderName());
+                data.putExtra(RESULT_PROBE_HDR, (decoderRenderer.getActiveVideoFormat() & MoonBridge.VIDEO_FORMAT_MASK_10BIT) != 0);
+                setResult(RESULT_OK, data);
+                quitOnStop = true;
+                finish();
+            }, measureMs);
+        }, warmupMs);
     }
 
     public void disconnect() {

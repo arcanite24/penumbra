@@ -200,10 +200,30 @@ public class ProfilesManager {
     public SharedPreferences getOverlayingSharedPreferences(Context context) {
         SharedPreferences base = androidx.preference.PreferenceManager.getDefaultSharedPreferences(context);
         SettingsProfile active = getActive();
-        if (active == null || active.getOptions() == null) {
-            return base;
+        SharedPreferences prefs = base;
+        if (active != null && active.getOptions() != null) {
+            prefs = new OverlaySharedPreferences(base, active.getOptions());
         }
-        return new OverlaySharedPreferences(base, active.getOptions());
+        Map<String, Object> overrides = transientOverrides;
+        if (overrides != null) {
+            prefs = new OverlaySharedPreferences(prefs, overrides);
+        }
+        return prefs;
+    }
+
+    // Short-lived overrides on top of everything else, used by the setup wizard's
+    // trial streams (PEN-8). Values must have the stored type (String, Integer, Boolean).
+    private volatile Map<String, Object> transientOverrides;
+
+    public void setTransientOverrides(Map<String, Object> overrides) {
+        transientOverrides = overrides;
+    }
+
+    /** Clears the overrides only if they are still the given ones (a newer stream may have set its own). */
+    public synchronized void clearTransientOverrides(Map<String, Object> overrides) {
+        if (transientOverrides == overrides) {
+            transientOverrides = null;
+        }
     }
 
     /**
