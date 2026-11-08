@@ -151,6 +151,7 @@ public class SeekBarPreference extends Preference
                 currentValue = seekBar.getProgress() + minValue;
                 persistInt(currentValue);
                 callChangeListener(currentValue);
+                notifyChanged();
             }
 
             dialog.dismiss();
@@ -179,6 +180,23 @@ public class SeekBarPreference extends Preference
         else {
             currentValue = (Integer) defaultValue;
         }
+    }
+
+    /** Penumbra: show the current value ("40 Mbps") instead of the long description. */
+    @Override
+    public CharSequence getSummary() {
+        if (!shouldPersist()) {
+            return super.getSummary();
+        }
+        int value = getPersistedInt(defaultValue);
+        String t;
+        if (divisor != 1) {
+            float f = value / (float) divisor;
+            t = f == Math.round(f) ? String.valueOf(Math.round(f)) : String.format((Locale) null, "%.1f", f);
+        } else {
+            t = String.valueOf(value);
+        }
+        return suffix == null ? t : t.concat(suffix.length() > 1 ? " " + suffix : suffix);
     }
 
     public void setProgress(int progress) {

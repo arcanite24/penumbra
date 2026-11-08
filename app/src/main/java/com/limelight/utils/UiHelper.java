@@ -105,6 +105,48 @@ public class UiHelper {
         activity.getResources().updateConfiguration(config, activity.getResources().getDisplayMetrics());
     }
 
+    /** Adds the navigation bar height to the view's bottom padding (Penumbra screens draw edge to edge). */
+    /** Hides the status and navigation bars; a swipe from the edge shows them briefly. */
+    @SuppressWarnings("deprecation")
+    public static void applyImmersive(android.view.Window window) {
+        if (window == null) {
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            window.getAttributes().layoutInDisplayCutoutMode =
+                    android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            // Draw edge to edge so no strip is reserved where the bars were
+            window.setDecorFitsSystemWindows(false);
+            android.view.WindowInsetsController c = window.getInsetsController();
+            if (c != null) {
+                c.setSystemBarsBehavior(android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+                c.hide(WindowInsets.Type.systemBars());
+            }
+        } else {
+            window.getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                    | View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                    | View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                    | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
+        }
+    }
+
+    public static void applyNavigationBarPadding(View view) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            return;
+        }
+        final int basePadding = view.getPaddingBottom();
+        view.setOnApplyWindowInsetsListener((v, insets) -> {
+            int bottom = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R ?
+                    insets.getInsets(WindowInsets.Type.navigationBars()).bottom :
+                    insets.getTappableElementInsets().bottom;
+            v.setPadding(v.getPaddingLeft(), v.getPaddingTop(), v.getPaddingRight(), basePadding + bottom);
+            return insets;
+        });
+        view.requestApplyInsets();
+    }
+
     public static void applyStatusBarPadding(View view) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             // This applies the padding that we omitted in notifyNewRootView() on Q
@@ -157,7 +199,10 @@ public class UiHelper {
                 @Override
                 public WindowInsets onApplyWindowInsets(View view, WindowInsets windowInsets) {
                     // Use the tappable insets so we can draw under the status bar in gesture mode
-                    Insets tappableInsets = windowInsets.getTappableElementInsets();
+                    // On R+ only visible bars count, so hidden (immersive) bars reserve nothing
+                    Insets tappableInsets = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R ?
+                            windowInsets.getInsets(WindowInsets.Type.systemBars()) :
+                            windowInsets.getTappableElementInsets();
                     view.setPadding(tappableInsets.left,
                             tappableInsets.top,
                             tappableInsets.right,
@@ -175,7 +220,12 @@ public class UiHelper {
                 }
             });
 
-            activity.getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                // Stable layout would keep reserving room for the hidden bars
+                applyImmersive(activity.getWindow());
+            } else {
+                activity.getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
+            }
         }
     }
 

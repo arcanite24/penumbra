@@ -8,7 +8,6 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ImageButton;
-import android.widget.RadioButton;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -48,16 +47,21 @@ public class ProfilesAdapter extends RecyclerView.Adapter<ProfilesAdapter.Profil
             profile.getModifiedUtc(), System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS));
 
         boolean isActive = activeProfile != null && activeProfile.getUuid().equals(profile.getUuid());
-        holder.profileActive.setChecked(isActive);
+        holder.profileActive.setText(isActive ? R.string.profile_in_use : R.string.profile_use);
+        holder.profileActive.setSelected(isActive);
+        holder.itemView.setActivated(isActive);
+        String name = profile.getName();
+        holder.profileInitial.setText(name == null || name.isEmpty() ? "?"
+                : name.substring(0, 1).toUpperCase(java.util.Locale.getDefault()));
 
         // Set click listeners
         holder.profileActive.setOnClickListener(v -> {
             if (isActive) {
                 profilesManager.setActive(null);
-                Toast.makeText(context, R.string.profile_manager_deactivated_profile, Toast.LENGTH_SHORT).show();
+                com.limelight.utils.PenumbraToast.makeText(context, R.string.profile_manager_deactivated_profile, Toast.LENGTH_SHORT).show();
             } else {
                 profilesManager.setActive(profile.getUuid());
-                Toast.makeText(context, context.getString(R.string.profile_manager_activated_profile, profile.getName()), Toast.LENGTH_SHORT).show();
+                com.limelight.utils.PenumbraToast.makeText(context, context.getString(R.string.profile_manager_activated_profile, profile.getName()), Toast.LENGTH_SHORT).show();
             }
             profilesManager.save(context);
         });
@@ -75,7 +79,7 @@ public class ProfilesAdapter extends RecyclerView.Adapter<ProfilesAdapter.Profil
                 .setPositiveButton(R.string.profile_manager_delete, (dialog, which) -> {
                     profilesManager.delete(profile.getUuid());
                     profilesManager.save(context);
-                    Toast.makeText(context, context.getString(R.string.profile_manager_profile_deleted, profile.getName()), Toast.LENGTH_SHORT).show();
+                    com.limelight.utils.PenumbraToast.makeText(context, context.getString(R.string.profile_manager_profile_deleted, profile.getName()), Toast.LENGTH_SHORT).show();
                 })
                 .setNegativeButton(context.getString(R.string.cancel), null)
                 .show();
@@ -93,7 +97,8 @@ public class ProfilesAdapter extends RecyclerView.Adapter<ProfilesAdapter.Profil
     static class ProfileViewHolder extends RecyclerView.ViewHolder {
         TextView profileName;
         TextView profileTimestamp;
-        RadioButton profileActive;
+        TextView profileActive;
+        TextView profileInitial;
         ImageButton editProfile;
         ImageButton deleteProfile;
 
@@ -102,6 +107,7 @@ public class ProfilesAdapter extends RecyclerView.Adapter<ProfilesAdapter.Profil
             profileName = itemView.findViewById(R.id.profileName);
             profileTimestamp = itemView.findViewById(R.id.profileTimestamp);
             profileActive = itemView.findViewById(R.id.profileActive);
+            profileInitial = itemView.findViewById(R.id.profileInitial);
             editProfile = itemView.findViewById(R.id.editProfile);
             deleteProfile = itemView.findViewById(R.id.deleteProfile);
         }

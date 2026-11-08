@@ -3,7 +3,6 @@ package com.limelight;
 import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.view.LayoutInflater;
-import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
 import android.view.ViewGroup;
@@ -12,7 +11,6 @@ import android.widget.Toast;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
-import androidx.appcompat.widget.Toolbar;
 import androidx.preference.Preference;
 import androidx.preference.PreferenceGroup;
 import androidx.preference.PreferenceManager;
@@ -28,7 +26,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-public class EditProfileActivity extends AppCompatActivity {
+public class EditProfileActivity extends AppCompatActivity implements com.limelight.preferences.SettingsSectionRail.Host {
     private String profileUuid;
     private SettingsProfile currentProfile;
     private InMemorySharedPreferences inMemoryPrefs;
@@ -42,10 +40,16 @@ public class EditProfileActivity extends AppCompatActivity {
 
         UiHelper.setLocale(this);
 
-        // Setup toolbar
-        Toolbar toolbar = findViewById(R.id.toolbar);
-        setSupportActionBar(toolbar);
-        getSupportActionBar().setDisplayHomeAsUpEnabled(true);
+        // Penumbra (PEN-3): same rail + panel layout as Settings
+        titleView = findViewById(R.id.profileTitle);
+        findViewById(R.id.profileBack).setOnClickListener(v -> finish());
+        findViewById(R.id.profileRename).setOnClickListener(v -> showRenameDialog());
+        findViewById(R.id.profileSave).setOnClickListener(v -> saveProfile());
+        com.limelight.ui.EclipseBackgroundView eclipse = findViewById(R.id.profileEclipse);
+        eclipse.setIntensity(0.7f);
+        eclipse.setEclipse(0.96f, 0.94f, 0.20f);
+        UiHelper.applyNavigationBarPadding(findViewById(R.id.profileContent));
+        sectionRail = new com.limelight.preferences.SettingsSectionRail(this, findViewById(R.id.profileSections));
 
         // Get profile UUID from intent
         profileUuid = getIntent().getStringExtra("profileUuid");
@@ -64,7 +68,7 @@ public class EditProfileActivity extends AppCompatActivity {
                 setTitle(getString(R.string.profile_manager_edit_profile) + currentProfile.getName());
                 inMemoryPrefs = new InMemorySharedPreferences(currentProfile.getOptions());
             } else {
-                Toast.makeText(this, R.string.profile_manager_profile_not_found, Toast.LENGTH_SHORT).show();
+                com.limelight.utils.PenumbraToast.makeText(this, R.string.profile_manager_profile_not_found, Toast.LENGTH_SHORT).show();
                 finish();
                 return;
             }
@@ -85,10 +89,20 @@ public class EditProfileActivity extends AppCompatActivity {
         UiHelper.notifyNewRootView(this);
     }
 
+    private android.widget.TextView titleView;
+    private com.limelight.preferences.SettingsSectionRail sectionRail;
+
     @Override
-    public boolean onCreateOptionsMenu(Menu menu) {
-        getMenuInflater().inflate(R.menu.edit_profile_menu, menu);
-        return true;
+    public void onSettingsReady(StreamSettings.SettingsFragment fragment) {
+        sectionRail.attach(fragment);
+    }
+
+    @Override
+    protected void onTitleChanged(CharSequence title, int color) {
+        super.onTitleChanged(title, color);
+        if (titleView != null) {
+            titleView.setText(title);
+        }
     }
 
     @Override
@@ -148,11 +162,11 @@ public class EditProfileActivity extends AppCompatActivity {
 
         if (ProfilesManager.getInstance().save(this)) {
             // Show confirmation Toast
-            Toast.makeText(this,
+            com.limelight.utils.PenumbraToast.makeText(this,
                     getString(R.string.profile_manager_profile_saved, displayName),
                     Toast.LENGTH_SHORT).show();
         } else {
-            Toast.makeText(this, R.string.profile_manager_failed_to_save, Toast.LENGTH_LONG).show();
+            com.limelight.utils.PenumbraToast.makeText(this, R.string.profile_manager_failed_to_save, Toast.LENGTH_LONG).show();
         }
 
         finish();
@@ -170,7 +184,7 @@ public class EditProfileActivity extends AppCompatActivity {
                 .setPositiveButton("OK", (dialog, which) -> {
                     String newName = input.getText().toString().trim();
                     if (newName.isEmpty()) {
-                        Toast.makeText(this, R.string.profile_manager_name_cannot_be_blank, Toast.LENGTH_SHORT).show();
+                        com.limelight.utils.PenumbraToast.makeText(this, R.string.profile_manager_name_cannot_be_blank, Toast.LENGTH_SHORT).show();
                         return;
                     }
 

@@ -65,7 +65,7 @@ import java.util.Arrays;
 import java.util.Iterator;
 import java.util.Map;
 
-public class StreamSettings extends AppCompatActivity {
+public class StreamSettings extends AppCompatActivity implements SettingsSectionRail.Host {
     private PreferenceConfiguration previousPrefs;
     private int previousDisplayPixelCount;
 
@@ -99,7 +99,23 @@ public class StreamSettings extends AppCompatActivity {
 
         setContentView(R.layout.activity_stream_settings);
 
+        findViewById(R.id.settingsBack).setOnClickListener(v -> onBackPressed());
+        com.limelight.ui.EclipseBackgroundView eclipse = findViewById(R.id.settingsEclipse);
+        eclipse.setIntensity(0.7f);
+        eclipse.setEclipse(0.96f, 0.94f, 0.20f);
+        UiHelper.applyNavigationBarPadding(findViewById(R.id.settingsContent));
+
 //        UiHelper.notifyNewRootView(this);
+    }
+
+    private SettingsSectionRail sectionRail;
+
+    @Override
+    public void onSettingsReady(SettingsFragment fragment) {
+        if (sectionRail == null) {
+            sectionRail = new SettingsSectionRail(this, findViewById(R.id.settingsSections));
+        }
+        sectionRail.attach(fragment);
     }
 
     @Override
@@ -154,7 +170,7 @@ public class StreamSettings extends AppCompatActivity {
                 startActivity(intent, null);
             } else {
                 if (newPrefs.language == PreferenceConfiguration.DEFAULT_LANGUAGE) {
-                    Toast.makeText(this, "Language has been reset to default, please restart the app!", Toast.LENGTH_LONG).show();
+                    com.limelight.utils.PenumbraToast.makeText(this, "Language has been reset to default, please restart the app!", Toast.LENGTH_LONG).show();
                     System.exit(0);
                 }
             }
@@ -319,8 +335,42 @@ public class StreamSettings extends AppCompatActivity {
         @Override
         public View onCreateView(@NonNull LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
             View view = super.onCreateView(inflater, container, savedInstanceState);
-            UiHelper.applyStatusBarPadding(view);
             return view;
+        }
+
+        /** List rows show their current choice (e.g. "1080p") instead of a long explanation. */
+        private static void showListValues(androidx.preference.PreferenceGroup group) {
+            for (int i = 0; i < group.getPreferenceCount(); i++) {
+                Preference p = group.getPreference(i);
+                if (p instanceof androidx.preference.PreferenceGroup) {
+                    showListValues((androidx.preference.PreferenceGroup) p);
+                } else if (p instanceof ListPreference && p.getSummaryProvider() == null) {
+                    final CharSequence fallback = p.getSummary();
+                    p.setSummaryProvider(pref -> {
+                        CharSequence entry = ((ListPreference) pref).getEntry();
+                        return entry != null ? entry : fallback;
+                    });
+                }
+            }
+        }
+
+        @Override
+        public void onViewCreated(@NonNull View view, Bundle savedInstanceState) {
+            super.onViewCreated(view, savedInstanceState);
+            setDivider(null);
+            androidx.recyclerview.widget.RecyclerView list = getListView();
+            list.setClipToPadding(false);
+            list.setPadding(list.getPaddingLeft(), Math.round(8 * getResources().getDisplayMetrics().density),
+                    list.getPaddingRight(), Math.round(24 * getResources().getDisplayMetrics().density));
+            list.setVerticalScrollBarEnabled(false);
+            // Section swaps fade the whole panel; per-row change animations made it flicker
+            list.setItemAnimator(null);
+            if (getPreferenceScreen() != null) {
+                showListValues(getPreferenceScreen());
+            }
+            if (getActivity() instanceof SettingsSectionRail.Host) {
+                ((SettingsSectionRail.Host) getActivity()).onSettingsReady(this);
+            }
         }
 
         public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState, boolean unused) {
@@ -778,7 +828,7 @@ public class StreamSettings extends AppCompatActivity {
                         String logs = tracker.getLog(context);
 
                         if (logs == null || logs.trim().isEmpty()) {
-                            Toast.makeText(context, context.getString(R.string.toast_no_logs), Toast.LENGTH_SHORT).show();
+                            com.limelight.utils.PenumbraToast.makeText(context, context.getString(R.string.toast_no_logs), Toast.LENGTH_SHORT).show();
                             return false;
                         }
 
@@ -812,7 +862,7 @@ public class StreamSettings extends AppCompatActivity {
                         } catch (IOException e) {
                             Log.d("PerformanceDataTracker", "Error creating log file");
                         } catch (android.content.ActivityNotFoundException ex) {
-                            Toast.makeText(context, noEmailClientsMsg, Toast.LENGTH_SHORT).show();
+                            com.limelight.utils.PenumbraToast.makeText(context, noEmailClientsMsg, Toast.LENGTH_SHORT).show();
                         }
                         return false;
                     }
@@ -830,7 +880,7 @@ public class StreamSettings extends AppCompatActivity {
                         }
                         File file1= getJsonContent(requireActivity(),file);
                         if(file1==null){
-                            Toast.makeText(requireActivity(),getString(R.string.pref_error_occurred),Toast.LENGTH_SHORT).show();
+                            com.limelight.utils.PenumbraToast.makeText(requireActivity(),getString(R.string.pref_error_occurred),Toast.LENGTH_SHORT).show();
                             return false;
                         }
                         Uri uri;
@@ -868,14 +918,14 @@ public class StreamSettings extends AppCompatActivity {
                 bitrateEditPref.setOnPreferenceChangeListener((preference, newValue) -> {
                     String value = (String) newValue;
                     if (TextUtils.isEmpty(value)) {
-                        Toast.makeText(getActivity(), getString(R.string.pref_enter_value_0_9999), Toast.LENGTH_SHORT).show();
+                        com.limelight.utils.PenumbraToast.makeText(getActivity(), getString(R.string.pref_enter_value_0_9999), Toast.LENGTH_SHORT).show();
                         return false;
                     }
                     float bitrateValue = Float.parseFloat(value) * 1000;
                     int bitrate = (int) bitrateValue;
                     SharedPreferences prefs = getPrefs();
                     prefs.edit().putInt(PreferenceConfiguration.BITRATE_PREF_STRING, bitrate).apply();
-                    Toast.makeText(getActivity(), getString(R.string.pref_set_success), Toast.LENGTH_SHORT).show();
+                    com.limelight.utils.PenumbraToast.makeText(getActivity(), getString(R.string.pref_set_success), Toast.LENGTH_SHORT).show();
                     return true;
                 });
             }
@@ -890,14 +940,14 @@ public class StreamSettings extends AppCompatActivity {
                 resolutionEditPref.setOnPreferenceChangeListener((preference, newValue) -> {
                     String value = (String) newValue;
                     if (TextUtils.isEmpty(value)) {
-                        Toast.makeText(getActivity(), getString(R.string.pref_enter_value_0_9999), Toast.LENGTH_SHORT).show();
+                        com.limelight.utils.PenumbraToast.makeText(getActivity(), getString(R.string.pref_enter_value_0_9999), Toast.LENGTH_SHORT).show();
                         return false;
                     }
 
                     // Verify format: [width]x[height]
                     String[] resolutionSegments = value.split("x");
                     if (resolutionSegments.length != 2) {
-                        Toast.makeText(getActivity(), getString(R.string.pref_error_occurred), Toast.LENGTH_SHORT).show();
+                        com.limelight.utils.PenumbraToast.makeText(getActivity(), getString(R.string.pref_error_occurred), Toast.LENGTH_SHORT).show();
                         return false;
                     }
 
@@ -906,7 +956,7 @@ public class StreamSettings extends AppCompatActivity {
                         int height = Integer.parseInt(resolutionSegments[1]);
                         
                         if (width <= 0 || height <= 0) {
-                            Toast.makeText(getActivity(), getString(R.string.pref_error_occurred), Toast.LENGTH_SHORT).show();
+                            com.limelight.utils.PenumbraToast.makeText(getActivity(), getString(R.string.pref_error_occurred), Toast.LENGTH_SHORT).show();
                             return false;
                         }
 
@@ -915,7 +965,7 @@ public class StreamSettings extends AppCompatActivity {
 
                         return true;
                     } catch (NumberFormatException e) {
-                        Toast.makeText(getActivity(), getString(R.string.pref_error_occurred), Toast.LENGTH_SHORT).show();
+                        com.limelight.utils.PenumbraToast.makeText(getActivity(), getString(R.string.pref_error_occurred), Toast.LENGTH_SHORT).show();
                         return false;
                     }
                 });
@@ -931,14 +981,14 @@ public class StreamSettings extends AppCompatActivity {
                 customRefreshRatePref.setOnPreferenceChangeListener((preference, newValue) -> {
                     String value = (String) newValue;
                     if (TextUtils.isEmpty(value)) {
-                        Toast.makeText(getActivity(), getString(R.string.pref_enter_value_0_9999), Toast.LENGTH_SHORT).show();
+                        com.limelight.utils.PenumbraToast.makeText(getActivity(), getString(R.string.pref_enter_value_0_9999), Toast.LENGTH_SHORT).show();
                         return false;
                     }
                     
                     try {
                         float refreshRate = Float.parseFloat(value);
                         if (refreshRate <= 0) {
-                            Toast.makeText(getActivity(), getString(R.string.pref_enter_value_0_9999), Toast.LENGTH_SHORT).show();
+                            com.limelight.utils.PenumbraToast.makeText(getActivity(), getString(R.string.pref_enter_value_0_9999), Toast.LENGTH_SHORT).show();
                             return false;
                         }
                         
@@ -951,7 +1001,7 @@ public class StreamSettings extends AppCompatActivity {
 
                         return true;
                     } catch (NumberFormatException e) {
-                        Toast.makeText(getActivity(), getString(R.string.pref_error_occurred), Toast.LENGTH_SHORT).show();
+                        com.limelight.utils.PenumbraToast.makeText(getActivity(), getString(R.string.pref_error_occurred), Toast.LENGTH_SHORT).show();
                         return false;
                     }
                 });
@@ -1003,7 +1053,7 @@ public class StreamSettings extends AppCompatActivity {
                     Uri uri = data.getData();
                     String json = FileUriUtils.openUriForRead(getActivity(), uri);
                     if (TextUtils.isEmpty(json)) {
-                        Toast.makeText(getActivity(), getString(R.string.pref_empty_file), Toast.LENGTH_SHORT).show();
+                        com.limelight.utils.PenumbraToast.makeText(getActivity(), getString(R.string.pref_empty_file), Toast.LENGTH_SHORT).show();
                         return;
                     }
                     String name = getPrefs().getString(KeyBoardControllerConfigurationLoader.OSC_PREFERENCE, KeyBoardControllerConfigurationLoader.OSC_PREFERENCE_VALUE);
@@ -1017,10 +1067,10 @@ public class StreamSettings extends AppCompatActivity {
                         prefEditor.putString(key, value);
                     }
                     prefEditor.apply();
-                    Toast.makeText(getActivity(), getString(R.string.pref_import_success), Toast.LENGTH_SHORT).show();
+                    com.limelight.utils.PenumbraToast.makeText(getActivity(), getString(R.string.pref_import_success), Toast.LENGTH_SHORT).show();
                 } catch (Exception e) {
                     e.printStackTrace();
-                    Toast.makeText(getActivity(), getString(R.string.pref_error_occurred) + e.getMessage(), Toast.LENGTH_SHORT).show();
+                    com.limelight.utils.PenumbraToast.makeText(getActivity(), getString(R.string.pref_error_occurred) + e.getMessage(), Toast.LENGTH_SHORT).show();
                 }
                 return;
             }
@@ -1030,16 +1080,16 @@ public class StreamSettings extends AppCompatActivity {
                     Uri uri = data.getData();
                     String json = FileUriUtils.openUriForRead(getActivity(), uri);
                     if (TextUtils.isEmpty(json)) {
-                        Toast.makeText(getActivity(), getString(R.string.pref_empty_file), Toast.LENGTH_SHORT).show();
+                        com.limelight.utils.PenumbraToast.makeText(getActivity(), getString(R.string.pref_empty_file), Toast.LENGTH_SHORT).show();
                         return;
                     }
                     SharedPreferences.Editor prefEditor = getActivity().getSharedPreferences(GameMenu.PREF_NAME, Activity.MODE_PRIVATE).edit();
                     prefEditor.putString(GameMenu.KEY_NAME, json);
                     prefEditor.apply();
-                    Toast.makeText(getActivity(), getString(R.string.pref_import_success), Toast.LENGTH_SHORT).show();
+                    com.limelight.utils.PenumbraToast.makeText(getActivity(), getString(R.string.pref_import_success), Toast.LENGTH_SHORT).show();
                 } catch (Exception e) {
                     e.printStackTrace();
-                    Toast.makeText(getActivity(), getString(R.string.pref_error_occurred) + e.getMessage(), Toast.LENGTH_SHORT).show();
+                    com.limelight.utils.PenumbraToast.makeText(getActivity(), getString(R.string.pref_error_occurred) + e.getMessage(), Toast.LENGTH_SHORT).show();
                 }
             }
         }

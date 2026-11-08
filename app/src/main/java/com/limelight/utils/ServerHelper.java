@@ -146,7 +146,7 @@ public class ServerHelper {
             boolean withVDisplay
     ) {
         if (computer.state == ComputerDetails.State.OFFLINE || computer.activeAddress == null) {
-            Toast.makeText(parent, parent.getString(R.string.pair_pc_offline), Toast.LENGTH_SHORT).show();
+            com.limelight.utils.PenumbraToast.makeText(parent, parent.getString(R.string.pair_pc_offline), Toast.LENGTH_SHORT).show();
             return;
         }
 
@@ -192,7 +192,7 @@ public class ServerHelper {
                               final Runnable onComplete,
                               final Runnable onFail
     ) {
-        parent.runOnUiThread(() -> Toast.makeText(parent, parent.getResources().getString(R.string.applist_quit_app) + " " + appName + "...", Toast.LENGTH_SHORT).show());
+        parent.runOnUiThread(() -> com.limelight.utils.PenumbraToast.makeText(parent, parent.getResources().getString(R.string.applist_quit_app) + " " + appName + "...", Toast.LENGTH_SHORT).show());
         new Thread(new Runnable() {
             @Override
             public void run() {
@@ -237,7 +237,7 @@ public class ServerHelper {
                 }
 
                 final String toastMessage = message;
-                parent.runOnUiThread(() -> Toast.makeText(parent, toastMessage, Toast.LENGTH_LONG).show());
+                parent.runOnUiThread(() -> com.limelight.utils.PenumbraToast.makeText(parent, toastMessage, Toast.LENGTH_LONG).show());
             }
         }).start();
 
@@ -268,7 +268,7 @@ public class ServerHelper {
             e.printStackTrace();
 
             final String toastMessage = e.getMessage();
-            parent.runOnUiThread(() -> Toast.makeText(parent, toastMessage, Toast.LENGTH_LONG).show());
+            parent.runOnUiThread(() -> com.limelight.utils.PenumbraToast.makeText(parent, toastMessage, Toast.LENGTH_LONG).show());
         }
     }
 }

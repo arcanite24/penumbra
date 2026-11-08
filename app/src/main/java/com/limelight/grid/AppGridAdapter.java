@@ -116,6 +116,10 @@ public class AppGridAdapter extends GenericGridAdapter<AppView.AppObject> {
         setLayoutId(getLayoutIdForPreferences(prefs));
     }
 
+    public CachedAppAssetLoader getLoader() {
+        return loader;
+    }
+
     public void cancelQueuedOperations() {
         loader.cancelForegroundLoads();
         loader.cancelBackgroundLoads();

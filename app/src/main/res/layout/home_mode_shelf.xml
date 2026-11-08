@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Shelf arrangement (concept 1): big hero banner over one row of icons -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:clipChildren="false"
+    android:clipToPadding="false"
+    android:orientation="vertical">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:layout_marginTop="10dp"
+        android:background="@drawable/home_panel"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:padding="14dp">
+
+        <androidx.cardview.widget.CardView
+            android:layout_width="wrap_content"
+            android:layout_height="match_parent"
+            app:cardBackgroundColor="#15132E"
+            app:cardCornerRadius="16dp"
+            app:cardElevation="6dp">
+
+            <com.limelight.ui.CoverImageView
+                android:id="@+id/heroImage"
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:importantForAccessibility="no"
+                android:scaleType="centerCrop" />
+
+            <TextView
+                android:id="@+id/heroImageText"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:visibility="gone" />
+        </androidx.cardview.widget.CardView>
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginStart="22dp"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/heroTitle"
+                style="@style/HomeHeroTitle"
+                android:maxLines="2"
+                android:textSize="30sp" />
+
+            <TextView
+                android:id="@+id/heroSubtitle"
+                style="@style/HomeHeroSubtitle" />
+
+            <TextView
+                android:id="@+id/heroButton"
+                style="@style/HomeHeroButton"
+                android:layout_marginTop="16dp" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/homeList"
+        android:layout_width="match_parent"
+        android:layout_height="150dp"
+        android:layout_marginStart="-24dp"
+        android:layout_marginEnd="-24dp"
+        android:clipChildren="false"
+        android:clipToPadding="false"
+        android:descendantFocusability="afterDescendants"
+        android:overScrollMode="never"
+        android:paddingTop="14dp"
+        android:paddingBottom="14dp"
+        android:paddingStart="20dp"
+        android:paddingEnd="20dp" />
+</LinearLayout>

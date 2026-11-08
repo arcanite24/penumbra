@@ -10,7 +10,6 @@ import androidx.recyclerview.widget.RecyclerView;
 
 import android.widget.ImageButton;
 
-import com.google.android.material.floatingactionbutton.FloatingActionButton;
 import com.limelight.profiles.ProfilesAdapter;
 import com.limelight.profiles.ProfilesManager;
 import com.limelight.utils.UiHelper;
@@ -35,9 +34,16 @@ public class ProfilesActivity extends AppCompatActivity implements ProfilesManag
         // Setup empty state
         emptyState = findViewById(R.id.emptyState);
 
-        // Setup FloatingActionButton
-        FloatingActionButton fab = findViewById(R.id.addProfileFab);
-        fab.setOnClickListener(v -> {
+        // Penumbra (PEN-3) chrome
+        findViewById(R.id.profilesBack).setOnClickListener(v -> finish());
+        com.limelight.ui.EclipseBackgroundView eclipse = findViewById(R.id.profilesEclipse);
+        eclipse.setIntensity(0.8f);
+        eclipse.setEclipse(0.90f, 0.88f, 0.17f);
+        UiHelper.applyNavigationBarPadding(findViewById(R.id.profilesContent));
+        recyclerView.setItemAnimator(null);
+
+        View addButton = findViewById(R.id.addProfileButton);
+        addButton.setOnClickListener(v -> {
             Intent intent = new Intent(this, EditProfileActivity.class);
             startActivity(intent);
         });
@@ -46,6 +52,10 @@ public class ProfilesActivity extends AppCompatActivity implements ProfilesManag
         ProfilesManager.getInstance().addListener(this);
 
         updateUI();
+        View initialFocus = adapter.getItemCount() > 0 ? recyclerView : addButton;
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            initialFocus.setFocusedByDefault(true);
+        }
 
         UiHelper.notifyNewRootView(this);
     }

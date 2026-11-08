@@ -1,47 +1,145 @@
-<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Penumbra home shell (PEN-3). The middle area swaps between the tiles,
+     shelf and grid arrangements; everything else is shared. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
-    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/homeRoot"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     tools:context=".AppView">
 
-    <FrameLayout
-        android:id="@+id/appFragmentContainer"
-        android:layout_width="fill_parent"
-        android:layout_height="wrap_content"
-        android:layout_below="@+id/appListText"
-        android:layout_alignParentStart="true"
-        android:layout_alignParentLeft="true"
-        android:layout_alignParentEnd="true"
-        android:layout_alignParentRight="true"
-        android:layout_alignParentBottom="true"
-        android:gravity="center" >
-    </FrameLayout>
+    <!-- Animated eclipse backdrop shared by every Penumbra screen -->
+    <com.limelight.ui.EclipseBackgroundView
+        android:id="@+id/homeEclipse"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
 
-    <TextView
-        android:id="@+id/appListText"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_alignParentTop="true"
-        android:layout_centerHorizontal="true"
-        android:gravity="center"
-        android:paddingTop="5dp"
-        android:paddingBottom="5dp"
-        android:preferKeepClear="true"
-        android:textSize="28sp" />
+    <!-- Blurred art of the focused app, cross-faded on focus changes -->
+    <ImageView
+        android:id="@+id/homeBackdrop"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:alpha="0.30"
+        android:importantForAccessibility="no"
+        android:scaleType="centerCrop" />
 
-    <com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
-        android:id="@+id/profilesButton"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_alignParentBottom="true"
-        android:layout_alignParentEnd="true"
-        android:layout_alignParentRight="true"
-        android:layout_marginBottom="24dp"
-        android:layout_marginEnd="24dp"
-        android:layout_marginRight="24dp"
-        android:contentDescription="@string/profile_manager_choose_profile"
-        android:layout_margin="16dp"
-        app:icon="@drawable/ic_profiles" />
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@drawable/home_scrim" />
 
-</RelativeLayout>
+    <LinearLayout
+        android:id="@+id/homeContent"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:clipChildren="false"
+        android:clipToPadding="false"
+        android:orientation="vertical"
+        android:paddingStart="24dp"
+        android:paddingEnd="24dp"
+        android:paddingTop="10dp"
+        android:paddingBottom="8dp">
+
+        <!-- Top bar -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="44dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:preferKeepClear="true">
+
+            <ImageView
+                android:layout_width="36dp"
+                android:layout_height="36dp"
+                android:importantForAccessibility="no"
+                android:src="@mipmap/ic_launcher_foreground" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
+                android:fontFamily="sans-serif-medium"
+                android:letterSpacing="0.28"
+                android:text="PENUMBRA"
+                android:textColor="#E8E6FF"
+                android:textSize="15sp"
+                tools:ignore="HardcodedText" />
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="30dp"
+                android:layout_marginStart="18dp"
+                android:background="@drawable/home_pill"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingStart="12dp"
+                android:paddingEnd="14dp">
+
+                <View
+                    android:layout_width="8dp"
+                    android:layout_height="8dp"
+                    android:background="@drawable/home_status_dot" />
+
+                <TextView
+                    android:id="@+id/appListText"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:maxLines="1"
+                    android:textColor="#FFFFFF"
+                    android:textSize="13sp" />
+            </LinearLayout>
+
+            <View
+                android:layout_width="0dp"
+                android:layout_height="1dp"
+                android:layout_weight="1" />
+
+            <TextView
+                android:id="@+id/profilesButton"
+                style="@style/HomeChip"
+                android:layout_marginStart="14dp"
+                android:contentDescription="@string/profile_manager_choose_profile"
+                android:drawablePadding="6dp"
+                android:text="@string/home_profiles" />
+
+            <TextView
+                android:id="@+id/homeSettingsButton"
+                style="@style/HomeChip"
+                android:contentDescription="@string/home_settings"
+                android:text="@string/home_settings" />
+        </LinearLayout>
+
+        <!-- The active arrangement is inflated in here -->
+        <FrameLayout
+            android:id="@+id/appFragmentContainer"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:clipChildren="false"
+            android:clipToPadding="false" />
+
+        <!-- Connection panel + controller hints -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="36dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <LinearLayout
+                android:id="@+id/homeConnectionPanel"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:gravity="center_vertical"
+                android:orientation="horizontal" />
+
+            <TextView style="@style/HomeHintBadge" android:text="A" tools:ignore="HardcodedText" />
+            <TextView style="@style/HomeHintLabel" android:text="@string/home_hint_play" />
+            <TextView style="@style/HomeHintBadge" android:text="Y" tools:ignore="HardcodedText" />
+            <TextView style="@style/HomeHintLabel" android:text="@string/home_hint_options" />
+            <TextView style="@style/HomeHintBadge" android:text="B" tools:ignore="HardcodedText" />
+            <TextView style="@style/HomeHintLabel" android:text="@string/home_hint_back" />
+        </LinearLayout>
+    </LinearLayout>
+</FrameLayout>

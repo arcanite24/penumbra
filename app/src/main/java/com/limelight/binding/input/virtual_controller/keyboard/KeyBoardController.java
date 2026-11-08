@@ -95,7 +95,7 @@ public class KeyBoardController {
         buttonConfigure.setOnLongClickListener(new View.OnLongClickListener() {
             @Override
             public boolean onLongClick(View v) {
-                Toast.makeText(context, context.getString(R.string.keyboard_configure_movable), Toast.LENGTH_SHORT).show();
+                com.limelight.utils.PenumbraToast.makeText(context, context.getString(R.string.keyboard_configure_movable), Toast.LENGTH_SHORT).show();
                 buttonConfigure.setTag("movable");
                 vibrator.vibrate(100); // Give haptic feedback
                 return true;
@@ -178,7 +178,7 @@ public class KeyBoardController {
                     message = context.getString(R.string.configuration_mode_exiting);
                 }
 
-                Toast.makeText(context, message, Toast.LENGTH_SHORT).show();
+                com.limelight.utils.PenumbraToast.makeText(context, message, Toast.LENGTH_SHORT).show();
 
                 buttonConfigure.invalidate();
 
@@ -495,7 +495,7 @@ public class KeyBoardController {
                     }
                 } catch (Exception e) {
                     e.printStackTrace();
-                    Toast.makeText(context, "Error loading custom keys: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+                    com.limelight.utils.PenumbraToast.makeText(context, "Error loading custom keys: " + e.getMessage(), Toast.LENGTH_SHORT).show();
                 }
             }
 
@@ -686,7 +686,7 @@ public class KeyBoardController {
                 }
 
                 if (feedback.length() > 0) {
-                    Toast.makeText(context, feedback.toString(), Toast.LENGTH_LONG).show();
+                    com.limelight.utils.PenumbraToast.makeText(context, feedback.toString(), Toast.LENGTH_LONG).show();
                 }
             });
 
@@ -696,7 +696,7 @@ public class KeyBoardController {
         } catch (Exception e) {
             LimeLog.warning("Error loading keyboard configuration: " + e.getMessage());
             e.printStackTrace();
-            Toast.makeText(context, context.getString(R.string.keyboard_load_error, e.getMessage()), Toast.LENGTH_SHORT).show();
+            com.limelight.utils.PenumbraToast.makeText(context, context.getString(R.string.keyboard_load_error, e.getMessage()), Toast.LENGTH_SHORT).show();
         }
     }
 

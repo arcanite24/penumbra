@@ -1,52 +1,78 @@
-<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Penumbra: add a host by address (PEN-3) -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
-    android:background="#1A1A1A"
-    android:layout_width="fill_parent"
-    android:layout_height="fill_parent"
-    android:paddingBottom="@dimen/activity_vertical_margin"
-    android:paddingLeft="@dimen/activity_horizontal_margin"
-    android:paddingRight="@dimen/activity_horizontal_margin"
-    android:paddingTop="@dimen/activity_vertical_margin"
-    tools:context=".preferences.AddComputerManually" >
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    tools:context=".preferences.AddComputerManually">
 
-    <TextView
-        android:id="@+id/manuallyAddPcText"
-        android:text="@string/title_add_pc"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:preferKeepClear="true"
-        android:layout_centerHorizontal="true"
-        android:textAppearance="?android:attr/textAppearanceLarge"
-        android:layout_alignParentTop="true"/>
+    <com.limelight.ui.EclipseBackgroundView
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
 
-    <EditText
-        android:id="@+id/hostTextView"
-        android:layout_width="wrap_content"
+    <LinearLayout
+        android:layout_width="560dp"
         android:layout_height="wrap_content"
-        android:layout_below="@+id/manuallyAddPcText"
-        android:layout_toLeftOf="@+id/addPcButton"
-        android:layout_toStartOf="@+id/addPcButton"
-        android:layout_marginTop="25dp"
-        android:layout_alignParentLeft="true"
-        android:layout_alignParentStart="true"
-        android:ems="10"
-        android:singleLine="true"
-        android:preferKeepClear="true"
-        android:inputType="textNoSuggestions"
-        android:hint="@string/ip_hint" >
-        
-        <requestFocus />
-    </EditText>
+        android:layout_gravity="center_horizontal"
+        android:layout_marginTop="32dp"
+        android:background="@drawable/home_panel"
+        android:orientation="vertical"
+        android:padding="22dp">
 
-    <Button
-        android:id="@+id/addPcButton"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="25dp"
-        android:layout_below="@+id/manuallyAddPcText"
-        android:layout_alignParentRight="true"
-        android:layout_alignParentEnd="true"
-        android:preferKeepClear="true"
-        android:text="@android:string/ok"/>
-	
-</RelativeLayout>
+        <TextView
+            android:id="@+id/manuallyAddPcText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:fontFamily="sans-serif-medium"
+            android:preferKeepClear="true"
+            android:text="@string/title_add_pc"
+            android:textColor="#FFFFFF"
+            android:textSize="24sp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/ip_hint"
+            android:textColor="#B3E8E6FF"
+            android:textSize="13sp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <EditText
+                android:id="@+id/hostTextView"
+                android:layout_width="0dp"
+                android:layout_height="48dp"
+                android:layout_weight="1"
+                android:background="@drawable/home_chip"
+                android:hint="192.168.1.10"
+                android:imeOptions="flagNoExtractUi|actionDone"
+                android:inputType="textNoSuggestions"
+                android:paddingStart="18dp"
+                android:paddingEnd="18dp"
+                android:preferKeepClear="true"
+                android:singleLine="true"
+                android:textColor="#FFFFFF"
+                android:textColorHint="#66E8E6FF"
+                tools:ignore="HardcodedText">
+
+                <requestFocus />
+            </EditText>
+
+            <TextView
+                android:id="@+id/addPcButton"
+                android:clickable="true"
+                android:focusable="true"
+                style="@style/HomeHeroButton"
+                android:layout_height="48dp"
+                android:layout_marginStart="12dp"
+                android:preferKeepClear="true"
+                android:text="@string/pc_add_host" />
+        </LinearLayout>
+    </LinearLayout>
+</FrameLayout>

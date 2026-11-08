@@ -195,7 +195,7 @@ public class AddComputerManually extends AppCompatActivity {
             AddComputerManually.this.runOnUiThread(new Runnable() {
                 @Override
                 public void run() {
-                    Toast.makeText(AddComputerManually.this, getResources().getString(R.string.addpc_success), Toast.LENGTH_LONG).show();
+                    com.limelight.utils.PenumbraToast.makeText(AddComputerManually.this, getResources().getString(R.string.addpc_success), Toast.LENGTH_LONG).show();
 
                     if (!isFinishing()) {
                         // Close the activity
@@ -327,7 +327,7 @@ public class AddComputerManually extends AppCompatActivity {
         UiHelper.notifyNewRootView(this);
 
         this.hostText = findViewById(R.id.hostTextView);
-        hostText.setImeOptions(EditorInfo.IME_ACTION_DONE);
+        hostText.setImeOptions(EditorInfo.IME_ACTION_DONE | EditorInfo.IME_FLAG_NO_EXTRACT_UI);
         hostText.setOnEditorActionListener(new TextView.OnEditorActionListener() {
             @Override
             public boolean onEditorAction(TextView textView, int actionId, KeyEvent keyEvent) {
@@ -397,7 +397,7 @@ public class AddComputerManually extends AppCompatActivity {
         String hostAddress = hostText.getText().toString().trim();
 
         if (hostAddress.length() == 0) {
-            Toast.makeText(AddComputerManually.this, getResources().getString(R.string.addpc_enter_ip), Toast.LENGTH_LONG).show();
+            com.limelight.utils.PenumbraToast.makeText(AddComputerManually.this, getResources().getString(R.string.addpc_enter_ip), Toast.LENGTH_LONG).show();
             return true;
         }
 
