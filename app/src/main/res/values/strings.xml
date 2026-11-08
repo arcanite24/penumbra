@@ -743,4 +743,22 @@
 
     <string name="title_checkbox_full_screen">Enable Full Screen</string>
     <string name="summary_checkbox_full_screen">Hide system bars with immersive mode</string>
+
+    <!-- Penumbra home (PEN-3) -->
+    <string name="home_layout_tiles">Tiles</string>
+    <string name="home_layout_shelf">Shelf</string>
+    <string name="home_layout_grid">Grid</string>
+    <string name="home_profiles">Profiles</string>
+    <string name="home_play">Play</string>
+    <string name="home_continue">Continue streaming</string>
+    <string name="home_status_running">Running on %1$s</string>
+    <string name="home_status_ready">Ready to stream from %1$s</string>
+    <string name="home_status_hidden">Hidden app</string>
+    <string name="home_hint_play">Play</string>
+    <string name="home_hint_options">Options</string>
+    <string name="home_hint_layout">Layout</string>
+    <string name="home_hint_back">Back</string>
+    <string name="home_live">LIVE</string>
+    <string name="home_codec_auto">Auto codec</string>
+    <string name="home_apps_count">%1$d apps</string>
 </resources>

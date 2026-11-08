@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Grid arrangement (concept 2): dense cover grid with a floating info card -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="horizontal">
+
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/homeList"
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="1"
+        android:clipToPadding="false"
+        android:descendantFocusability="afterDescendants"
+        android:overScrollMode="never"
+        android:paddingTop="6dp"
+        android:paddingBottom="6dp" />
+
+    <LinearLayout
+        android:layout_width="230dp"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center_vertical"
+        android:layout_marginStart="14dp"
+        android:background="@drawable/home_panel"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <TextView
+            android:id="@+id/heroTitle"
+            style="@style/HomeHeroTitle"
+            android:maxLines="3"
+            android:textSize="22sp" />
+
+        <TextView
+            android:id="@+id/heroSubtitle"
+            style="@style/HomeHeroSubtitle" />
+
+        <LinearLayout
+            android:id="@+id/heroBadges"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:orientation="horizontal" />
+
+        <TextView
+            android:id="@+id/heroButton"
+            style="@style/HomeHeroButton"
+            android:layout_marginTop="14dp" />
+    </LinearLayout>
+</LinearLayout>

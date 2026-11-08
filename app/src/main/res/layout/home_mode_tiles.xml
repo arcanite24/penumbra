@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Tiles arrangement (concept 3): hero text over a centred carousel of large tiles -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:clipChildren="false"
+    android:clipToPadding="false"
+    android:orientation="vertical">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/heroTitle"
+                style="@style/HomeHeroTitle" />
+
+            <TextView
+                android:id="@+id/heroSubtitle"
+                style="@style/HomeHeroSubtitle" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/heroButton"
+            style="@style/HomeHeroButton" />
+    </LinearLayout>
+
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/homeList"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:layout_marginStart="-24dp"
+        android:layout_marginEnd="-24dp"
+        android:clipChildren="false"
+        android:clipToPadding="false"
+        android:descendantFocusability="afterDescendants"
+        android:overScrollMode="never"
+        android:paddingTop="14dp"
+        android:paddingBottom="14dp" />
+</LinearLayout>

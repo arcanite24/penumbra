@@ -5,18 +5,16 @@ import java.io.StringReader;
 import java.util.HashSet;
 import java.util.List;
 
-import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton;
 import com.limelight.computers.ComputerManagerListener;
 import com.limelight.computers.ComputerManagerService;
 import com.limelight.grid.AppGridAdapter;
+import com.limelight.grid.HomeAppAdapter;
 import com.limelight.nvstream.http.ComputerDetails;
 import com.limelight.nvstream.http.NvApp;
 import com.limelight.nvstream.http.NvHTTP;
 import com.limelight.nvstream.http.PairingManager;
 import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.profiles.ProfilesManager;
-import com.limelight.ui.AdapterFragment;
-import com.limelight.ui.AdapterFragmentCallbacks;
 import com.limelight.utils.CacheHelper;
 import com.limelight.utils.Dialog;
 import com.limelight.utils.ServerHelper;
@@ -31,31 +29,39 @@ import android.content.Intent;
 import android.content.ServiceConnection;
 import android.content.SharedPreferences;
 import android.content.res.Configuration;
+import android.database.DataSetObserver;
 import android.graphics.Bitmap;
+import android.graphics.RenderEffect;
+import android.graphics.Shader;
 import android.graphics.drawable.BitmapDrawable;
+import android.graphics.drawable.Drawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.IBinder;
+import android.preference.PreferenceManager;
 import android.view.ContextMenu;
+import android.view.KeyEvent;
+import android.view.LayoutInflater;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
 import android.view.ContextMenu.ContextMenuInfo;
-import android.widget.AbsListView;
-import android.widget.AdapterView;
-import android.widget.AdapterView.OnItemClickListener;
+import android.view.ViewGroup;
+import android.view.WindowInsets;
 import android.widget.ImageView;
 import android.widget.TextView;
 import android.widget.Toast;
-import android.widget.AdapterView.AdapterContextMenuInfo;
 
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.recyclerview.widget.GridLayoutManager;
+import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.RecyclerView;
 
 import org.xmlpull.v1.XmlPullParserException;
 
-public class AppView extends AppCompatActivity implements AdapterFragmentCallbacks {
+public class AppView extends AppCompatActivity implements HomeAppAdapter.Listener {
     private AppGridAdapter appGridAdapter;
     private String uuidString;
     private ShortcutHelper shortcutHelper;
@@ -71,6 +77,30 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
     private HashSet<Integer> hiddenAppIds = new HashSet<>();
 
     private PreferenceConfiguration prefConfig;
+
+    // Penumbra home (PEN-3): one shared shell, three switchable arrangements
+    public final static String HOME_LAYOUT_PREF = "home_layout";
+    private final static String[] HOME_LAYOUT_KEYS = {"tiles", "shelf", "grid"};
+    private final static int HOME_TILES = 0;
+    private final static int HOME_SHELF = 1;
+    private final static int HOME_GRID = 2;
+
+    private int homeLayout = HOME_TILES;
+    private HomeAppAdapter homeAdapter;
+    private RecyclerView homeList;
+    private TextView heroTitle, heroSubtitle, heroButton;
+    private ImageView heroImage;
+    private TextView heroImageText;
+    private ViewGroup heroBadges;
+    private ImageView homeBackdrop;
+    private TextView backdropText;
+    private AppObject focusedApp;
+    private int lastBackdropAppId = -1;
+    private boolean homeObserverRegistered;
+
+    // Target of the context menu, since RecyclerView has no AdapterContextMenuInfo
+    private AppObject menuTargetApp;
+    private View menuTargetView;
 
     private final static int START_OR_RESUME_ID = 1;
     private final static int QUIT_ID = 2;
@@ -147,16 +177,7 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
                                 return;
                             }
 
-                            // Despite my best efforts to catch all conditions that could
-                            // cause the activity to be destroyed when we try to commit
-                            // I haven't been able to, so we have this try-catch block.
-                            try {
-                                getFragmentManager().beginTransaction()
-                                        .replace(R.id.appFragmentContainer, new AdapterFragment())
-                                        .commitAllowingStateLoss();
-                            } catch (IllegalStateException e) {
-                                e.printStackTrace();
-                            }
+                            setupHome();
                         }
                     });
                 }
@@ -180,15 +201,12 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
             // Update the app grid adapter to create grid items with the correct layout
             appGridAdapter.updateLayoutWithPreferences(this, this.prefConfig);
 
-            try {
-                // Reinflate the app grid itself to pick up the layout change
-                getFragmentManager().beginTransaction()
-                        .replace(R.id.appFragmentContainer, new AdapterFragment())
-                        .commitAllowingStateLoss();
-            } catch (IllegalStateException e) {
-                e.printStackTrace();
+            // Reinflate the arrangement to pick up the new size
+            if (homeAdapter != null) {
+                applyHomeLayout(homeLayout, true);
             }
         }
+        updateConnectionPanel();
     }
 
     private void startComputerUpdates() {
@@ -317,6 +335,8 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
         findViewById(R.id.profilesButton)
             .setOnClickListener(v -> startActivity(new Intent(this, ProfilesActivity.class)));
 
+        setupHomeShell();
+
         showHiddenApps = getIntent().getBooleanExtra(SHOW_HIDDEN_APPS_EXTRA, false);
         uuidString = getIntent().getStringExtra(UUID_EXTRA);
 
@@ -332,6 +352,7 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
         label.setText(computerName);
 
         this.prefConfig = PreferenceConfiguration.readPreferences(this);
+        updateConnectionPanel();
 
         // Bind to the computer manager service
         bindService(new Intent(this, ComputerManagerService.class), serviceConnection,
@@ -398,7 +419,11 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
         inForeground = true;
         startComputerUpdates();
 
-        ExtendedFloatingActionButton profilesButton = findViewById(R.id.profilesButton);
+        // Settings may have changed while we were away
+        this.prefConfig = PreferenceConfiguration.readPreferences(this);
+        updateConnectionPanel();
+
+        TextView profilesButton = findViewById(R.id.profilesButton);
         // User report Samsung and Xiaomi devices have this problem
         // Why just these two brands have the most problems?
         if (profilesButton == null) {
@@ -406,10 +431,9 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
         }
         String activeProfileName = ProfilesManager.getInstance().getActiveName();
         if (activeProfileName.isEmpty()) {
-            profilesButton.shrink();
+            profilesButton.setText(R.string.home_profiles);
         } else {
             profilesButton.setText(activeProfileName);
-            profilesButton.extend();
         }
     }
 
@@ -444,8 +468,10 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
     public void onCreateContextMenu(ContextMenu menu, View v, ContextMenuInfo menuInfo) {
         super.onCreateContextMenu(menu, v, menuInfo);
 
-        AdapterContextMenuInfo info = (AdapterContextMenuInfo) menuInfo;
-        AppObject selectedApp = (AppObject) appGridAdapter.getItem(info.position);
+        AppObject selectedApp = menuTargetApp;
+        if (selectedApp == null || computer == null) {
+            return;
+        }
 
         menu.setHeaderTitle(selectedApp.app.getAppName());
 
@@ -483,10 +509,11 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             // Only add an option to create shortcut if box art is loaded
             // and when we're in grid-mode (not list-mode).
-            ImageView appImageView = info.targetView.findViewById(R.id.grid_image);
+            ImageView appImageView = menuTargetView != null ? menuTargetView.findViewById(R.id.grid_image) : null;
             if (appImageView != null) {
                 // We have a grid ImageView, so we must be in grid-mode
-                BitmapDrawable drawable = (BitmapDrawable)appImageView.getDrawable();
+                Drawable d = appImageView.getDrawable();
+                BitmapDrawable drawable = d instanceof BitmapDrawable ? (BitmapDrawable) d : null;
                 if (drawable != null && drawable.getBitmap() != null) {
                     // We have a bitmap loaded too
                     menu.add(Menu.NONE, CREATE_SHORTCUT_ID, 5, getResources().getString(R.string.applist_menu_scut));
@@ -503,8 +530,10 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
 
     @Override
     public boolean onContextItemSelected(MenuItem item) {
-        AdapterContextMenuInfo info = (AdapterContextMenuInfo) item.getMenuInfo();
-        final AppObject app = (AppObject) appGridAdapter.getItem(info.position);
+        final AppObject app = menuTargetApp;
+        if (app == null) {
+            return super.onContextItemSelected(item);
+        }
         int itemId = item.getItemId();
         switch (itemId) {
             case START_WITH_QUIT:
@@ -591,7 +620,7 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
             }
 
             case CREATE_SHORTCUT_ID: {
-                ImageView appImageView = info.targetView.findViewById(R.id.grid_image);
+                ImageView appImageView = menuTargetView.findViewById(R.id.grid_image);
                 Bitmap appBits = ((BitmapDrawable) appImageView.getDrawable()).getBitmap();
                 if (!shortcutHelper.createPinnedGameShortcut(computer, app.app, appBits)) {
                     Toast.makeText(AppView.this, getResources().getString(R.string.unable_to_pin_shortcut), Toast.LENGTH_LONG).show();
@@ -734,45 +763,377 @@ public class AppView extends AppCompatActivity implements AdapterFragmentCallbac
         });
     }
 
-    @Override
-    public int getAdapterFragmentLayoutId() {
-        return PreferenceConfiguration.readPreferences(AppView.this).smallIconMode ?
-                    R.layout.app_grid_view_small : R.layout.app_grid_view;
+    // ---------------------------------------------------------------------------------------
+    // Penumbra home (PEN-3)
+    // ---------------------------------------------------------------------------------------
+
+    private int dp(float v) {
+        return Math.round(v * getResources().getDisplayMetrics().density);
+    }
+
+    /** Things that don't depend on the app list: backdrop, layout switcher, insets. */
+    private void setupHomeShell() {
+        homeBackdrop = findViewById(R.id.homeBackdrop);
+        backdropText = new TextView(this);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            homeBackdrop.setRenderEffect(RenderEffect.createBlurEffect(48f, 48f, Shader.TileMode.CLAMP));
+        } else {
+            homeBackdrop.setAlpha(0.25f);
+        }
+
+        String saved = PreferenceManager.getDefaultSharedPreferences(this).getString(HOME_LAYOUT_PREF, HOME_LAYOUT_KEYS[0]);
+        for (int i = 0; i < HOME_LAYOUT_KEYS.length; i++) {
+            if (HOME_LAYOUT_KEYS[i].equals(saved)) {
+                homeLayout = i;
+            }
+        }
+
+        int[] chipIds = {R.id.homeLayoutTiles, R.id.homeLayoutShelf, R.id.homeLayoutGrid};
+        for (int i = 0; i < chipIds.length; i++) {
+            final int layout = i;
+            findViewById(chipIds[i]).setOnClickListener(v -> {
+                if (homeAdapter != null && layout != homeLayout) {
+                    applyHomeLayout(layout, false);
+                }
+            });
+        }
+        updateLayoutChips();
+
+        // Keep the hint bar clear of the gesture/navigation area
+        final View content = findViewById(R.id.homeContent);
+        final int basePadding = content.getPaddingBottom();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            content.setOnApplyWindowInsetsListener((view, insets) -> {
+                int bottom = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R ?
+                        insets.getInsets(WindowInsets.Type.navigationBars()).bottom :
+                        insets.getTappableElementInsets().bottom;
+                view.setPadding(view.getPaddingLeft(), view.getPaddingTop(), view.getPaddingRight(),
+                        basePadding + bottom);
+                return insets;
+            });
+            content.requestApplyInsets();
+        }
+    }
+
+    private void updateLayoutChips() {
+        int[] chipIds = {R.id.homeLayoutTiles, R.id.homeLayoutShelf, R.id.homeLayoutGrid};
+        for (int i = 0; i < chipIds.length; i++) {
+            findViewById(chipIds[i]).setSelected(i == homeLayout);
+        }
+    }
+
+    /** Called once the app grid adapter exists. */
+    private void setupHome() {
+        if (!homeObserverRegistered) {
+            homeObserverRegistered = true;
+            appGridAdapter.registerDataSetObserver(new DataSetObserver() {
+                @Override
+                public void onChanged() {
+                    onAppListChanged();
+                }
+            });
+        }
+        applyHomeLayout(homeLayout, true);
+    }
+
+    private void onAppListChanged() {
+        if (homeAdapter == null) {
+            return;
+        }
+        homeAdapter.notifyDataSetChanged();
+
+        // Drop the focused app if it's gone from the list
+        if (focusedApp != null && homeAdapter.positionOfAppId(focusedApp.app.getAppId()) == RecyclerView.NO_POSITION) {
+            focusedApp = null;
+        }
+
+        View focus = getCurrentFocus();
+        if (focusedApp == null || focus == null) {
+            focusInitialItem();
+        } else {
+            refreshHero();
+        }
+    }
+
+    private void applyHomeLayout(int layout, boolean focusList) {
+        homeLayout = layout;
+        PreferenceManager.getDefaultSharedPreferences(this).edit()
+                .putString(HOME_LAYOUT_PREF, HOME_LAYOUT_KEYS[layout]).apply();
+        updateLayoutChips();
+
+        int modeRes, itemRes;
+        float scale;
+        switch (layout) {
+            case HOME_SHELF:
+                modeRes = R.layout.home_mode_shelf;
+                itemRes = R.layout.home_item_shelf;
+                scale = 1.12f;
+                break;
+            case HOME_GRID:
+                modeRes = R.layout.home_mode_grid;
+                itemRes = R.layout.home_item_grid;
+                scale = 1.04f;
+                break;
+            case HOME_TILES:
+            default:
+                modeRes = R.layout.home_mode_tiles;
+                itemRes = R.layout.home_item_tile;
+                scale = 1.08f;
+                break;
+        }
+
+        ViewGroup container = findViewById(R.id.appFragmentContainer);
+        container.removeAllViews();
+        LayoutInflater.from(this).inflate(modeRes, container, true);
+
+        heroTitle = container.findViewById(R.id.heroTitle);
+        heroSubtitle = container.findViewById(R.id.heroSubtitle);
+        heroButton = container.findViewById(R.id.heroButton);
+        heroImage = container.findViewById(R.id.heroImage);
+        heroImageText = container.findViewById(R.id.heroImageText);
+        heroBadges = container.findViewById(R.id.heroBadges);
+        homeList = container.findViewById(R.id.homeList);
+
+        heroButton.setFocusable(false);
+        heroButton.setOnClickListener(v -> {
+            if (focusedApp != null) {
+                onAppClicked(focusedApp, findItemViewForApp(focusedApp));
+            }
+        });
+
+        homeAdapter = new HomeAppAdapter(appGridAdapter, this, itemRes, scale);
+        if (layout == HOME_GRID) {
+            final GridLayoutManager glm = new GridLayoutManager(this, 5);
+            homeList.setLayoutManager(glm);
+            homeList.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
+                int span = Math.max(2, (r - l - v.getPaddingLeft() - v.getPaddingRight()) / dp(132));
+                if (span != glm.getSpanCount()) {
+                    v.post(() -> glm.setSpanCount(span));
+                }
+            });
+        } else {
+            homeList.setLayoutManager(new LinearLayoutManager(this, LinearLayoutManager.HORIZONTAL, false));
+            if (layout == HOME_TILES) {
+                // Pad so the first and last tile can sit in the centre
+                final int tileWidth = dp(176 + 20);
+                homeList.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
+                    int pad = Math.max(0, (r - l - tileWidth) / 2);
+                    if (v.getPaddingLeft() != pad) {
+                        v.post(() -> v.setPadding(pad, v.getPaddingTop(), pad, v.getPaddingBottom()));
+                    }
+                });
+            }
+        }
+        homeList.setItemAnimator(null);
+        homeList.setAdapter(homeAdapter);
+
+        refreshHero();
+        if (focusList) {
+            focusInitialItem();
+        }
+    }
+
+    private View findItemViewForApp(AppObject app) {
+        if (homeList == null || homeAdapter == null) {
+            return null;
+        }
+        RecyclerView.ViewHolder vh = homeList.findViewHolderForItemId(app.app.getAppId());
+        return vh != null ? vh.itemView : null;
+    }
+
+    private void focusInitialItem() {
+        if (homeList == null || homeAdapter == null || homeAdapter.getItemCount() == 0) {
+            refreshHero();
+            return;
+        }
+
+        int pos = RecyclerView.NO_POSITION;
+        if (focusedApp != null) {
+            pos = homeAdapter.positionOfAppId(focusedApp.app.getAppId());
+        }
+        if (pos == RecyclerView.NO_POSITION && lastRunningAppId != 0) {
+            pos = homeAdapter.positionOfAppId(lastRunningAppId);
+        }
+        if (pos == RecyclerView.NO_POSITION) {
+            pos = 0;
+        }
+
+        final int target = pos;
+        focusedApp = homeAdapter.getApp(target);
+        refreshHero();
+        homeList.scrollToPosition(target);
+        homeList.post(() -> {
+            if (homeList == null) {
+                return;
+            }
+            RecyclerView.ViewHolder vh = homeList.findViewHolderForAdapterPosition(target);
+            if (vh != null) {
+                vh.itemView.requestFocus();
+            } else {
+                homeList.requestFocus();
+            }
+        });
+    }
+
+    private void refreshHero() {
+        if (heroTitle == null) {
+            return;
+        }
+
+        String host = computer != null ? computer.name : getIntent().getStringExtra(NAME_EXTRA);
+        AppObject app = focusedApp;
+        if (app == null) {
+            heroTitle.setText(host);
+            heroSubtitle.setText(appGridAdapter != null ?
+                    getString(R.string.home_apps_count, appGridAdapter.getCount()) : "");
+            heroButton.setVisibility(View.INVISIBLE);
+            return;
+        }
+
+        boolean running = app.app.getAppId() == lastRunningAppId && lastRunningAppId != 0;
+        heroTitle.setText(app.app.getAppName());
+        if (app.isHidden) {
+            heroSubtitle.setText(R.string.home_status_hidden);
+        } else {
+            heroSubtitle.setText(getString(running ? R.string.home_status_running : R.string.home_status_ready, host));
+        }
+        heroButton.setVisibility(View.VISIBLE);
+        heroButton.setText(running ? R.string.home_continue : R.string.home_play);
+        if (heroButton.getCompoundDrawablesRelative()[0] == null) {
+            Drawable play = getResources().getDrawable(R.drawable.ic_play, getTheme()).mutate();
+            play.setBounds(0, 0, dp(18), dp(18));
+            play.setTint(0xFF050418);
+            heroButton.setCompoundDrawablesRelative(play, null, null, null);
+        }
+
+        if (heroBadges != null) {
+            heroBadges.removeAllViews();
+            addPill(heroBadges, prefConfig.enableHdr ? "HDR" : "SDR");
+            addPill(heroBadges, Math.round(prefConfig.fps) + " FPS");
+            addPill(heroBadges, prefConfig.height + "p");
+        }
+
+        AppGridAdapter source = appGridAdapter;
+        if (source != null && source.getLoader() != null) {
+            if (heroImage != null) {
+                source.getLoader().populateImageView(app.app, heroImage, heroImageText);
+            }
+            if (lastBackdropAppId != app.app.getAppId()) {
+                lastBackdropAppId = app.app.getAppId();
+                source.getLoader().populateImageView(app.app, homeBackdrop, backdropText);
+            }
+        }
+    }
+
+    private void addPill(ViewGroup parent, String text) {
+        TextView pill = (TextView) LayoutInflater.from(this).inflate(R.layout.home_badge, parent, false);
+        pill.setText(text);
+        parent.addView(pill);
+    }
+
+    private void updateConnectionPanel() {
+        ViewGroup panel = findViewById(R.id.homeConnectionPanel);
+        if (panel == null || prefConfig == null) {
+            return;
+        }
+        panel.removeAllViews();
+
+        String codec;
+        switch (prefConfig.videoFormat) {
+            case FORCE_AV1: codec = "AV1"; break;
+            case FORCE_HEVC: codec = "HEVC"; break;
+            case FORCE_H264: codec = "H.264"; break;
+            default: codec = getString(R.string.home_codec_auto); break;
+        }
+
+        addPill(panel, prefConfig.height + "p");
+        addPill(panel, Math.round(prefConfig.fps) + " FPS");
+        addPill(panel, Math.round(prefConfig.bitrate / 1000f) + " Mbps");
+        addPill(panel, codec);
+        addPill(panel, prefConfig.enableHdr ? "HDR ON" : "HDR OFF");
+        if (prefConfig.useVirtualDisplay) {
+            addPill(panel, "Virtual display");
+        }
     }
 
     @Override
-    public void receiveAbsListView(AbsListView listView) {
-        listView.setAdapter(appGridAdapter);
-        listView.setOnItemClickListener(new OnItemClickListener() {
-            @Override
-            public void onItemClick(AdapterView<?> arg0, View arg1, int pos,
-                                    long id) {
-                AppObject app = (AppObject) appGridAdapter.getItem(pos);
+    public void onAppFocused(AppObject app, View view, int position) {
+        focusedApp = app;
+        refreshHero();
 
-                // Only open the context menu if something is running, otherwise start it
-                if (lastRunningAppId != 0) {
-                    if (prefConfig.resumeWithoutConfirm && lastRunningAppId == app.app.getAppId()) {
-                        ServerHelper.doStart(AppView.this, app.app, computer, managerBinder, prefConfig.useVirtualDisplay);
-                    } else {
-                        openContextMenu(arg1);
-                    }
-                } else {
-                    if (prefConfig.useVirtualDisplay && !(computer.vDisplaySupported && computer.vDisplayDriverReady)) {
-                        UiHelper.displayVdisplayConfirmationDialog(
-                                AppView.this,
-                                computer,
-                                () -> ServerHelper.doStart(AppView.this, app.app, computer, managerBinder, true),
-                                null
-                        );
-                    } else {
-                        ServerHelper.doStart(AppView.this, app.app, computer, managerBinder, prefConfig.useVirtualDisplay);
-                    }
+        if (homeLayout == HOME_TILES && homeList != null) {
+            // Keep the focused tile in the middle of the carousel
+            int dx = (view.getLeft() + view.getRight()) / 2 - homeList.getWidth() / 2;
+            if (dx != 0) {
+                homeList.smoothScrollBy(dx, 0);
+            }
+        }
+    }
+
+    @Override
+    public void onAppClicked(AppObject app, View view) {
+        if (computer == null || managerBinder == null) {
+            return;
+        }
+
+        // Only open the context menu if something is running, otherwise start it
+        if (lastRunningAppId != 0) {
+            if (prefConfig.resumeWithoutConfirm && lastRunningAppId == app.app.getAppId()) {
+                ServerHelper.doStart(AppView.this, app.app, computer, managerBinder, prefConfig.useVirtualDisplay);
+            } else {
+                onAppMenu(app, view);
+            }
+        } else {
+            if (prefConfig.useVirtualDisplay && !(computer.vDisplaySupported && computer.vDisplayDriverReady)) {
+                UiHelper.displayVdisplayConfirmationDialog(
+                        AppView.this,
+                        computer,
+                        () -> ServerHelper.doStart(AppView.this, app.app, computer, managerBinder, true),
+                        null
+                );
+            } else {
+                ServerHelper.doStart(AppView.this, app.app, computer, managerBinder, prefConfig.useVirtualDisplay);
+            }
+        }
+    }
+
+    @Override
+    public void onAppMenu(AppObject app, View view) {
+        menuTargetApp = app;
+        menuTargetView = view != null ? view : heroButton;
+        if (menuTargetView == null) {
+            return;
+        }
+        menuTargetView.setOnCreateContextMenuListener(this);
+        openContextMenu(menuTargetView);
+    }
+
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        int code = event.getKeyCode();
+        boolean handled = code == KeyEvent.KEYCODE_BUTTON_L1 || code == KeyEvent.KEYCODE_BUTTON_R1
+                || code == KeyEvent.KEYCODE_BUTTON_Y || code == KeyEvent.KEYCODE_MENU;
+        if (!handled || homeAdapter == null) {
+            return super.dispatchKeyEvent(event);
+        }
+
+        if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
+            if (code == KeyEvent.KEYCODE_BUTTON_L1 || code == KeyEvent.KEYCODE_BUTTON_R1) {
+                int n = HOME_LAYOUT_KEYS.length;
+                int next = (homeLayout + (code == KeyEvent.KEYCODE_BUTTON_R1 ? 1 : n - 1)) % n;
+                applyHomeLayout(next, true);
+            } else {
+                // Options for whichever app has focus
+                View focus = getCurrentFocus();
+                RecyclerView.ViewHolder vh = (focus != null && homeList != null) ? homeList.findContainingViewHolder(focus) : null;
+                if (vh instanceof HomeAppAdapter.Holder && vh.getBindingAdapterPosition() != RecyclerView.NO_POSITION) {
+                    onAppMenu(homeAdapter.getApp(vh.getBindingAdapterPosition()), vh.itemView);
+                } else if (focusedApp != null) {
+                    onAppMenu(focusedApp, findItemViewForApp(focusedApp));
                 }
             }
-        });
-        UiHelper.applyStatusBarPadding(listView);
-        registerForContextMenu(listView);
-        listView.requestFocus();
+        }
+        return true;
     }
 
     public static class AppObject {
