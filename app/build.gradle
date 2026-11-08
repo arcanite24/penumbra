@@ -40,7 +40,7 @@ android {
                     "obtainium_app_url",
                     "data:text/html;base64,PGgxPlJvb3QgYnVpbGQgaXMgbm90IGF2YWlsYWJsZTwvaDE+"
 
-            applicationId "com.limelight.root"
+            applicationId "io.github.arcanite24.penumbra.root"
             dimension "root"
             buildConfigField "boolean", "ROOT_BUILD", "true"
         }
@@ -54,9 +54,9 @@ android {
 
             resValue "string",
                     "obtainium_app_url",
-                    "https://apps.obtainium.imranr.dev/redirect?r=obtainium://app/%7B%22id%22%3A%22com.limelight.noir%22%2C%22url%22%3A%22https%3A%2F%2Fgithub.com%2FClassicOldSong%2Fmoonlight-android%22%2C%22author%22%3A%22ClassicOldSong%22%2C%22name%22%3A%22Artemis%22%2C%22additionalSettings%22%3A%22%7B%5C%22apkFilterRegEx%5C%22%3A%5C%22nonRoot%5C%22%2C%5C%22matchGroutToUse%5C%22%3A%5C%22%241%5C%22%2C%5C%22versionExtractionRegEx%5C%22%3A%5C%22v(.%2B)%5C%22%7D%22%7D"
+                    "https://apps.obtainium.imranr.dev/redirect?r=obtainium://app/%7B%22id%22%3A%22io.github.arcanite24.penumbra%22%2C%22url%22%3A%22https%3A%2F%2Fgithub.com%2Farcanite24%2Fpenumbra%22%2C%22author%22%3A%22arcanite24%22%2C%22name%22%3A%22Penumbra%22%2C%22additionalSettings%22%3A%22%7B%5C%22apkFilterRegEx%5C%22%3A%5C%22nonRoot%5C%22%2C%5C%22matchGroutToUse%5C%22%3A%5C%22%241%5C%22%2C%5C%22versionExtractionRegEx%5C%22%3A%5C%22v(.%2B)%5C%22%7D%22%7D"
 
-            applicationId "com.limelight"
+            applicationId "io.github.arcanite24.penumbra"
             dimension "root"
             buildConfigField "boolean", "ROOT_BUILD", "false"
         }
@@ -95,10 +95,10 @@ android {
 
     buildTypes {
         debug {
-            applicationIdSuffix ".noirdebug"
-            resValue "string", "app_label", "Diana"
-            resValue "string", "app_label_root", "Diana (Root)"
-            resValue "string", "app_label_game", "Diana (Game)"
+            applicationIdSuffix ".debug"
+            resValue "string", "app_label", "Penumbra Debug"
+            resValue "string", "app_label_root", "Penumbra Debug (Root)"
+            resValue "string", "app_label_game", "Penumbra Debug (Game)"
 
             minifyEnabled true
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
@@ -133,11 +133,12 @@ android {
             // cool projects the best of luck with their efforts. All I ask
             // is to please change the applicationId before you publish.
             //
-            // TL;DR: Leave the following line alone!
-            applicationIdSuffix ".noir"
-            resValue "string", "app_label", "Artemis"
-            resValue "string", "app_label_root", "Artemis (Root)"
-            resValue "string", "app_label_game", "Artemis (Game)"
+            // Penumbra: the base applicationId is already our own
+            // (io.github.arcanite24.penumbra), so release builds need no suffix
+            // and install side by side with Moonlight and Artemis.
+            resValue "string", "app_label", "Penumbra"
+            resValue "string", "app_label_root", "Penumbra (Root)"
+            resValue "string", "app_label_game", "Penumbra (Game)"
 
             minifyEnabled true
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
