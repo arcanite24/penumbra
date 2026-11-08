@@ -172,6 +172,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private VideoStats activeWindowVideoStats;
     private VideoStats lastWindowVideoStats;
     private VideoStats globalVideoStats;
+    private volatile long probeLastFlipUptime;
 
     private long lastTimestampUs;
     private int lastFrameNumber;
@@ -1753,6 +1754,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     minDecodeTimeFullLog = fullLog;
                 }
             }
+            probeLastFlipUptime = SystemClock.uptimeMillis();
             globalVideoStats.add(activeWindowVideoStats);
             lastWindowVideoStats.copy(activeWindowVideoStats);
             activeWindowVideoStats.clear();
@@ -2107,6 +2109,28 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             return 0;
         }
         return (int)(globalVideoStats.decoderTimeMs / globalVideoStats.totalFramesReceived);
+    }
+
+    /**
+     * Cumulative counters for the setup wizard's trial streams (PEN-8):
+     * {decoderTimeMs, framesReceived, framesRendered, totalFrames, framesLost, uptimeMs}.
+     * Updated about once a second when the stats window flips.
+     */
+    public long[] getProbeCounters() {
+        VideoStats s = globalVideoStats;
+        return new long[] {s.decoderTimeMs, s.totalFramesReceived, s.totalFramesRendered,
+                s.totalFrames, s.framesLost, probeLastFlipUptime};
+    }
+
+    public String getActiveDecoderName() {
+        if ((videoFormat & MoonBridge.VIDEO_FORMAT_MASK_H264) != 0 && avcDecoder != null) {
+            return avcDecoder.getName();
+        } else if ((videoFormat & MoonBridge.VIDEO_FORMAT_MASK_H265) != 0 && hevcDecoder != null) {
+            return hevcDecoder.getName();
+        } else if ((videoFormat & MoonBridge.VIDEO_FORMAT_MASK_AV1) != 0 && av1Decoder != null) {
+            return av1Decoder.getName();
+        }
+        return "";
     }
 
     public Boolean performanceWasTracked() {
