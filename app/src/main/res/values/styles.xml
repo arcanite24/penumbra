@@ -19,10 +19,15 @@
         <!-- All customizations that are NOT specific to a particular API-level can go here. -->
         <item name="android:windowActionBar">false</item>
         <item name="android:windowNoTitle">true</item>
-        <item name="android:statusBarColor">#1A1A1A</item>
-        <item name="android:navigationBarColor">#1A1A1A</item>
-        <item name="android:colorBackground">#1A1A1A</item>
-        <item name="android:windowBackground">#1A1A1A</item>
+        <item name="android:statusBarColor">#050418</item>
+        <item name="android:navigationBarColor">#050418</item>
+        <item name="android:colorBackground">#050418</item>
+        <item name="android:windowBackground">#050418</item>
+        <item name="colorAccent">#6FE7FF</item>
+        <item name="colorSecondary">#6FE7FF</item>
+        <item name="colorPrimary">#A98BFF</item>
+        <item name="alertDialogTheme">@style/PenumbraDialog</item>
+        <item name="android:alertDialogTheme">@style/PenumbraDialog</item>
     </style>
 
     <style name="StreamBaseTheme" parent="AppBaseTheme">
@@ -50,6 +55,13 @@
     </style>
 
     <style name="SettingsTheme" parent="Theme.AppCompat.NoActionBar">
+        <item name="colorAccent">#6FE7FF</item>
+        <item name="colorControlActivated">#6FE7FF</item>
+        <item name="colorPrimary">#A98BFF</item>
+        <item name="android:textColorPrimary">#FFFFFF</item>
+        <item name="android:textColorSecondary">#B3E8E6FF</item>
+        <item name="alertDialogTheme">@style/PenumbraDialog</item>
+        <item name="android:alertDialogTheme">@style/PenumbraDialog</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:colorBackground">@android:color/transparent</item>
@@ -151,5 +163,12 @@
         <item name="android:paddingEnd">22dp</item>
         <item name="android:textColor">#050418</item>
         <item name="android:textSize">14sp</item>
+    </style>
+
+    <style name="PenumbraDialog" parent="Theme.AppCompat.Dialog.Alert">
+        <item name="colorAccent">#6FE7FF</item>
+        <item name="colorControlActivated">#6FE7FF</item>
+        <item name="android:windowBackground">@drawable/penumbra_dialog_bg</item>
+        <item name="android:textColorPrimary">#FFFFFF</item>
     </style>
 </resources>

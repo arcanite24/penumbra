@@ -419,6 +419,13 @@ public class AppView extends AppCompatActivity implements HomeAppAdapter.Listene
         inForeground = true;
         startComputerUpdates();
 
+        // The arrangement may have been changed in Settings
+        int layout = readHomeLayoutPref();
+        if (layout != homeLayout && homeAdapter != null) {
+            applyHomeLayout(layout, true);
+        }
+        homeLayout = layout;
+
         // Settings may have changed while we were away
         this.prefConfig = PreferenceConfiguration.readPreferences(this);
         updateConnectionPanel();
@@ -773,6 +780,8 @@ public class AppView extends AppCompatActivity implements HomeAppAdapter.Listene
 
     /** Things that don't depend on the app list: backdrop, layout switcher, insets. */
     private void setupHomeShell() {
+        ((com.limelight.ui.EclipseBackgroundView) findViewById(R.id.homeEclipse)).setEclipse(0.60f, 0.06f, 0.13f);
+        UiHelper.applyNavigationBarPadding(findViewById(R.id.homeContent));
         homeBackdrop = findViewById(R.id.homeBackdrop);
         backdropText = new TextView(this);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -781,45 +790,45 @@ public class AppView extends AppCompatActivity implements HomeAppAdapter.Listene
             homeBackdrop.setAlpha(0.25f);
         }
 
+        homeLayout = readHomeLayoutPref();
+
+        // The arrangement is picked in Settings > Interface
+        findViewById(R.id.homeSettingsButton).setOnClickListener(v ->
+                startActivity(new Intent(this, com.limelight.preferences.StreamSettings.class)));
+
+        // A soft pulsing glow behind the Play button
+        startHeroGlow();
+
+    }
+
+    private int readHomeLayoutPref() {
         String saved = PreferenceManager.getDefaultSharedPreferences(this).getString(HOME_LAYOUT_PREF, HOME_LAYOUT_KEYS[0]);
         for (int i = 0; i < HOME_LAYOUT_KEYS.length; i++) {
             if (HOME_LAYOUT_KEYS[i].equals(saved)) {
-                homeLayout = i;
+                return i;
             }
         }
-
-        int[] chipIds = {R.id.homeLayoutTiles, R.id.homeLayoutShelf, R.id.homeLayoutGrid};
-        for (int i = 0; i < chipIds.length; i++) {
-            final int layout = i;
-            findViewById(chipIds[i]).setOnClickListener(v -> {
-                if (homeAdapter != null && layout != homeLayout) {
-                    applyHomeLayout(layout, false);
-                }
-            });
-        }
-        updateLayoutChips();
-
-        // Keep the hint bar clear of the gesture/navigation area
-        final View content = findViewById(R.id.homeContent);
-        final int basePadding = content.getPaddingBottom();
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            content.setOnApplyWindowInsetsListener((view, insets) -> {
-                int bottom = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R ?
-                        insets.getInsets(WindowInsets.Type.navigationBars()).bottom :
-                        insets.getTappableElementInsets().bottom;
-                view.setPadding(view.getPaddingLeft(), view.getPaddingTop(), view.getPaddingRight(),
-                        basePadding + bottom);
-                return insets;
-            });
-            content.requestApplyInsets();
-        }
+        return HOME_TILES;
     }
 
-    private void updateLayoutChips() {
-        int[] chipIds = {R.id.homeLayoutTiles, R.id.homeLayoutShelf, R.id.homeLayoutGrid};
-        for (int i = 0; i < chipIds.length; i++) {
-            findViewById(chipIds[i]).setSelected(i == homeLayout);
+    private android.animation.ObjectAnimator heroGlow;
+
+    private void startHeroGlow() {
+        if (heroGlow != null) {
+            heroGlow.cancel();
         }
+        heroGlow = null;
+        if (heroButton == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
+            return;
+        }
+        heroButton.setOutlineSpotShadowColor(0xFF6FE7FF);
+        heroButton.setOutlineAmbientShadowColor(0xFFA98BFF);
+        heroGlow = android.animation.ObjectAnimator.ofFloat(heroButton, "translationZ", dp(2), dp(14));
+        heroGlow.setDuration(1600);
+        heroGlow.setRepeatMode(android.animation.ValueAnimator.REVERSE);
+        heroGlow.setRepeatCount(android.animation.ValueAnimator.INFINITE);
+        heroGlow.setInterpolator(new android.view.animation.AccelerateDecelerateInterpolator());
+        heroGlow.start();
     }
 
     /** Called once the app grid adapter exists. */
@@ -857,9 +866,6 @@ public class AppView extends AppCompatActivity implements HomeAppAdapter.Listene
 
     private void applyHomeLayout(int layout, boolean focusList) {
         homeLayout = layout;
-        PreferenceManager.getDefaultSharedPreferences(this).edit()
-                .putString(HOME_LAYOUT_PREF, HOME_LAYOUT_KEYS[layout]).apply();
-        updateLayoutChips();
 
         int modeRes, itemRes;
         float scale;
@@ -919,7 +925,13 @@ public class AppView extends AppCompatActivity implements HomeAppAdapter.Listene
                 homeList.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
                     int pad = Math.max(0, (r - l - tileWidth) / 2);
                     if (v.getPaddingLeft() != pad) {
-                        v.post(() -> v.setPadding(pad, v.getPaddingTop(), pad, v.getPaddingBottom()));
+                        v.post(() -> {
+                            v.setPadding(pad, v.getPaddingTop(), pad, v.getPaddingBottom());
+                            // Re-anchor so the focused tile sits in the middle
+                            int p = focusedApp != null ? homeAdapter.positionOfAppId(focusedApp.app.getAppId()) : 0;
+                            ((LinearLayoutManager) homeList.getLayoutManager())
+                                    .scrollToPositionWithOffset(Math.max(0, p), 0);
+                        });
                     }
                 });
             }
@@ -927,6 +939,13 @@ public class AppView extends AppCompatActivity implements HomeAppAdapter.Listene
         homeList.setItemAnimator(null);
         homeList.setAdapter(homeAdapter);
 
+        // The arrangement slides in as a whole
+        container.setAlpha(0f);
+        container.setTranslationX(dp(18));
+        container.animate().alpha(1f).translationX(0f).setDuration(380)
+                .setInterpolator(new android.view.animation.DecelerateInterpolator(2f)).start();
+
+        startHeroGlow();
         refreshHero();
         if (focusList) {
             focusInitialItem();
@@ -962,17 +981,35 @@ public class AppView extends AppCompatActivity implements HomeAppAdapter.Listene
         focusedApp = homeAdapter.getApp(target);
         refreshHero();
         homeList.scrollToPosition(target);
-        homeList.post(() -> {
+        focusItemWhenReady(target, 0);
+    }
+
+    private View defaultFocusView;
+
+    /** RecyclerView may still be laying out; retry a few frames until the tile takes focus. */
+    private void focusItemWhenReady(final int target, final int attempt) {
+        if (homeList == null) {
+            return;
+        }
+        homeList.postDelayed(() -> {
             if (homeList == null) {
                 return;
             }
             RecyclerView.ViewHolder vh = homeList.findViewHolderForAdapterPosition(target);
-            if (vh != null) {
-                vh.itemView.requestFocus();
-            } else {
-                homeList.requestFocus();
+            if (vh != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                // In touch mode nothing can take focus yet; make this tile the one the first
+                // controller press lands on instead of the top bar
+                if (defaultFocusView != null && defaultFocusView != vh.itemView) {
+                    defaultFocusView.setFocusedByDefault(false);
+                }
+                defaultFocusView = vh.itemView;
+                defaultFocusView.setFocusedByDefault(true);
             }
-        });
+            boolean ok = vh != null && (vh.itemView.requestFocus() || homeList.isInTouchMode());
+            if (!ok && attempt < 6) {
+                focusItemWhenReady(target, attempt + 1);
+            }
+        }, attempt == 0 ? 0 : 80);
     }
 
     private void refreshHero() {
@@ -991,6 +1028,15 @@ public class AppView extends AppCompatActivity implements HomeAppAdapter.Listene
         }
 
         boolean running = app.app.getAppId() == lastRunningAppId && lastRunningAppId != 0;
+        if (!app.app.getAppName().contentEquals(heroTitle.getText())) {
+            // Slide the new title in
+            for (View v : new View[]{heroTitle, heroSubtitle}) {
+                v.setAlpha(0f);
+                v.setTranslationX(dp(14));
+                v.animate().alpha(1f).translationX(0f).setDuration(260)
+                        .setInterpolator(new android.view.animation.DecelerateInterpolator(2f)).start();
+            }
+        }
         heroTitle.setText(app.app.getAppName());
         if (app.isHidden) {
             heroSubtitle.setText(R.string.home_status_hidden);
@@ -1021,6 +1067,9 @@ public class AppView extends AppCompatActivity implements HomeAppAdapter.Listene
             if (lastBackdropAppId != app.app.getAppId()) {
                 lastBackdropAppId = app.app.getAppId();
                 source.getLoader().populateImageView(app.app, homeBackdrop, backdropText);
+                homeBackdrop.animate().cancel();
+                homeBackdrop.setAlpha(0.08f);
+                homeBackdrop.animate().alpha(0.30f).setDuration(600).start();
             }
         }
     }
@@ -1111,18 +1160,13 @@ public class AppView extends AppCompatActivity implements HomeAppAdapter.Listene
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
         int code = event.getKeyCode();
-        boolean handled = code == KeyEvent.KEYCODE_BUTTON_L1 || code == KeyEvent.KEYCODE_BUTTON_R1
-                || code == KeyEvent.KEYCODE_BUTTON_Y || code == KeyEvent.KEYCODE_MENU;
+        boolean handled = code == KeyEvent.KEYCODE_BUTTON_Y || code == KeyEvent.KEYCODE_MENU;
         if (!handled || homeAdapter == null) {
             return super.dispatchKeyEvent(event);
         }
 
         if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
-            if (code == KeyEvent.KEYCODE_BUTTON_L1 || code == KeyEvent.KEYCODE_BUTTON_R1) {
-                int n = HOME_LAYOUT_KEYS.length;
-                int next = (homeLayout + (code == KeyEvent.KEYCODE_BUTTON_R1 ? 1 : n - 1)) % n;
-                applyHomeLayout(next, true);
-            } else {
+            {
                 // Options for whichever app has focus
                 View focus = getCurrentFocus();
                 RecyclerView.ViewHolder vh = (focus != null && homeList != null) ? homeList.findContainingViewHolder(focus) : null;

@@ -6,15 +6,20 @@
     android:id="@+id/homeRoot"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#050418"
     tools:context=".AppView">
 
-    <!-- Blurred art of the focused app -->
+    <!-- Animated eclipse backdrop shared by every Penumbra screen -->
+    <com.limelight.ui.EclipseBackgroundView
+        android:id="@+id/homeEclipse"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!-- Blurred art of the focused app, cross-faded on focus changes -->
     <ImageView
         android:id="@+id/homeBackdrop"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:alpha="0.45"
+        android:alpha="0.30"
         android:importantForAccessibility="no"
         android:scaleType="centerCrop" />
 
@@ -22,26 +27,6 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:background="@drawable/home_scrim" />
-
-    <!-- Eclipse: a glow with a dark disc slightly offset in front of it -->
-    <View
-        android:id="@+id/homeEclipseGlow"
-        android:layout_width="560dp"
-        android:layout_height="560dp"
-        android:layout_gravity="top|end"
-        android:layout_marginTop="-230dp"
-        android:layout_marginEnd="-200dp"
-        android:background="@drawable/home_eclipse_glow" />
-
-    <View
-        android:id="@+id/homeEclipseDisc"
-        android:layout_width="230dp"
-        android:layout_height="230dp"
-        android:layout_gravity="top|end"
-        android:layout_marginTop="-120dp"
-        android:layout_marginEnd="-12dp"
-        android:alpha="0.9"
-        android:background="@drawable/home_eclipse_ring" />
 
     <LinearLayout
         android:id="@+id/homeContent"
@@ -111,27 +96,18 @@
                 android:layout_weight="1" />
 
             <TextView
-                android:id="@+id/homeLayoutTiles"
-                style="@style/HomeChip"
-                android:text="@string/home_layout_tiles" />
-
-            <TextView
-                android:id="@+id/homeLayoutShelf"
-                style="@style/HomeChip"
-                android:text="@string/home_layout_shelf" />
-
-            <TextView
-                android:id="@+id/homeLayoutGrid"
-                style="@style/HomeChip"
-                android:text="@string/home_layout_grid" />
-
-            <TextView
                 android:id="@+id/profilesButton"
                 style="@style/HomeChip"
                 android:layout_marginStart="14dp"
                 android:contentDescription="@string/profile_manager_choose_profile"
                 android:drawablePadding="6dp"
                 android:text="@string/home_profiles" />
+
+            <TextView
+                android:id="@+id/homeSettingsButton"
+                style="@style/HomeChip"
+                android:contentDescription="@string/home_settings"
+                android:text="@string/home_settings" />
         </LinearLayout>
 
         <!-- The active arrangement is inflated in here -->
@@ -162,15 +138,6 @@
             <TextView style="@style/HomeHintLabel" android:text="@string/home_hint_play" />
             <TextView style="@style/HomeHintBadge" android:text="Y" tools:ignore="HardcodedText" />
             <TextView style="@style/HomeHintLabel" android:text="@string/home_hint_options" />
-            <TextView
-                style="@style/HomeHintBadge"
-                android:layout_width="wrap_content"
-                android:background="@drawable/home_shoulder_hint"
-                android:paddingStart="5dp"
-                android:paddingEnd="5dp"
-                android:text="L1 R1"
-                tools:ignore="HardcodedText" />
-            <TextView style="@style/HomeHintLabel" android:text="@string/home_hint_layout" />
             <TextView style="@style/HomeHintBadge" android:text="B" tools:ignore="HardcodedText" />
             <TextView style="@style/HomeHintLabel" android:text="@string/home_hint_back" />
         </LinearLayout>

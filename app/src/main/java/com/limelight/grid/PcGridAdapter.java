@@ -67,6 +67,28 @@ public class PcGridAdapter extends GenericGridAdapter<PcView.ComputerObject> {
         }
 
         txtView.setText(obj.details.name);
+
+        // Penumbra host card status line
+        TextView status = parentView.findViewById(R.id.pc_status);
+        View dot = parentView.findViewById(R.id.pc_status_dot);
+        if (status != null && dot != null) {
+            int color;
+            if (obj.details.state == ComputerDetails.State.ONLINE &&
+                    obj.details.pairState == PairingManager.PairState.NOT_PAIRED) {
+                status.setText(R.string.pc_status_unpaired);
+                color = 0xFFFFC857;
+            } else if (obj.details.state == ComputerDetails.State.ONLINE) {
+                status.setText(R.string.pc_status_ready);
+                color = 0xFF5CF2A0;
+            } else if (obj.details.state == ComputerDetails.State.OFFLINE) {
+                status.setText(R.string.pc_status_offline);
+                color = 0xFFFF6B8A;
+            } else {
+                status.setText(R.string.pc_status_checking);
+                color = 0xFF99A0C8;
+            }
+            dot.getBackground().mutate().setTint(color);
+        }
         if (obj.details.state == ComputerDetails.State.ONLINE) {
             txtView.setAlpha(1.0f);
         }

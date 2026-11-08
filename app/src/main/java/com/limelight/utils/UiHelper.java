@@ -105,6 +105,22 @@ public class UiHelper {
         activity.getResources().updateConfiguration(config, activity.getResources().getDisplayMetrics());
     }
 
+    /** Adds the navigation bar height to the view's bottom padding (Penumbra screens draw edge to edge). */
+    public static void applyNavigationBarPadding(View view) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            return;
+        }
+        final int basePadding = view.getPaddingBottom();
+        view.setOnApplyWindowInsetsListener((v, insets) -> {
+            int bottom = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R ?
+                    insets.getInsets(WindowInsets.Type.navigationBars()).bottom :
+                    insets.getTappableElementInsets().bottom;
+            v.setPadding(v.getPaddingLeft(), v.getPaddingTop(), v.getPaddingRight(), basePadding + bottom);
+            return insets;
+        });
+        view.requestApplyInsets();
+    }
+
     public static void applyStatusBarPadding(View view) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             // This applies the padding that we omitted in notifyNewRootView() on Q

@@ -7,6 +7,7 @@ import android.widget.ImageView;
 import android.widget.TextView;
 
 import androidx.annotation.NonNull;
+import androidx.cardview.widget.CardView;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.limelight.AppView;
@@ -87,6 +88,7 @@ public class HomeAppAdapter extends RecyclerView.Adapter<HomeAppAdapter.Holder> 
         final ImageView image;
         final TextView text;
         final TextView live;
+        final CardView card;
         AppView.AppObject app;
 
         Holder(@NonNull View itemView) {
@@ -94,6 +96,12 @@ public class HomeAppAdapter extends RecyclerView.Adapter<HomeAppAdapter.Holder> 
             image = itemView.findViewById(R.id.grid_image);
             text = itemView.findViewById(R.id.grid_text);
             live = itemView.findViewById(R.id.home_item_live);
+            card = (CardView) ((ViewGroup) itemView).getChildAt(0);
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                // Focused cards cast a cyan/violet glow instead of a grey shadow
+                card.setOutlineSpotShadowColor(0xFF6FE7FF);
+                card.setOutlineAmbientShadowColor(0xFFA98BFF);
+            }
 
             itemView.setOnClickListener(v -> {
                 if (app != null) {
@@ -110,6 +118,8 @@ public class HomeAppAdapter extends RecyclerView.Adapter<HomeAppAdapter.Holder> 
             itemView.setOnFocusChangeListener((v, hasFocus) -> {
                 float s = hasFocus ? focusScale : 1f;
                 v.animate().scaleX(s).scaleY(s).setDuration(140).start();
+                float density = v.getResources().getDisplayMetrics().density;
+                card.animate().translationZ(hasFocus ? 18 * density : 0).setDuration(180).start();
                 if (hasFocus) {
                     v.setTranslationZ(8f);
                     int pos = getBindingAdapterPosition();
