@@ -909,35 +909,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 try { streamSurfaceView.setZOrderOnTop(false); } catch (Throwable ignored) {}
                 try { streamSurfaceView.setZOrderMediaOverlay(false); } catch (Throwable ignored) {}
 
-                // 2) setFrameRate via reflection (compat < 30)
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
-                    float displayHz = 60f;
-                    try {
-                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-                            displayHz = currentDisplay.getMode().getRefreshRate();
-                        } else {
-                            displayHz = currentDisplay.getRefreshRate();
-                        }
-                    } catch (Throwable ignored) {}
-
-                    float targetFps = (prefConfig != null && prefConfig.fps > 0) ? prefConfig.fps : displayHz;
-
-                    boolean isMTKDevice;
-                    try {
-                        String sum = (android.os.Build.MANUFACTURER + " " + android.os.Build.HARDWARE + " " + android.os.Build.BOARD)
-                                .toLowerCase(java.util.Locale.US);
-                        isMTKDevice = sum.contains("mtk") || sum.contains("mediatek");
-                    } catch (Throwable t) { isMTKDevice = false; }
-
-                    int compat = isMTKDevice
-                            ? Surface.FRAME_RATE_COMPATIBILITY_DEFAULT
-                            : Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE;
-
-                    try {
-                        java.lang.reflect.Method m = SurfaceView.class.getMethod("setFrameRate", float.class, int.class);
-                        m.invoke(streamSurfaceView, Math.min(targetFps, displayHz), compat);
-                    } catch (Throwable ignored) {}
-                }
+                // Penumbra (PEN-6): the frame rate hint is set once, in surfaceCreated(). An extra
+                // reflective SurfaceView.setFrameRate(float, int) call lived here, but SurfaceView has
+                // no such method, so getMethod() always threw and it never ran.
             }
         } catch (Throwable ignored) {}
     }

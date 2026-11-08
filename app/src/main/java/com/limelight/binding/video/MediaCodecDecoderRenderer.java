@@ -608,7 +608,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         videoDecoder.configure(format, renderTarget, null, 0);
 
-        try { applySurfaceFrameRate(renderTarget, targetFps); } catch (Throwable ignored) {}
+        // Penumbra (PEN-6): the surface frame rate is set once, in Game.surfaceCreated(), which
+        // picks the refresh rate that suits the stream. Overriding it here with the raw stream FPS
+        // and COMPATIBILITY_DEFAULT could drop a 120 Hz panel to 60 Hz and add display latency.
 
         try {
             MediaCodecInfo __info = (android.os.Build.VERSION.SDK_INT >= 21) ? videoDecoder.getCodecInfo() : null;
@@ -2272,22 +2274,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             return str;
         }
     }
-
-
-    private void applySurfaceFrameRate(android.view.Surface surface, int targetFps) {
-        if (surface == null) return;
-        try {
-            // API 30+ supports Surface.setFrameRate; for older, attempt View-based call elsewhere.
-            if (android.os.Build.VERSION.SDK_INT >= 30) {
-                surface.setFrameRate((float) targetFps,
-                        android.view.Surface.FRAME_RATE_COMPATIBILITY_DEFAULT);
-                LimeLog.info("Applied Surface frame rate: " + targetFps + " Hz");
-            }
-        } catch (Throwable t) {
-            // best-effort
-        }
-    }
-
 
 
     private boolean isMTKDecoderName(String name) {
