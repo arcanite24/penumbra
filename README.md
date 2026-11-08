@@ -1,4 +1,24 @@
-# Artemis Android
+<p align="center">
+  <img src="branding/penumbra-logo.png" alt="Penumbra logo" width="160">
+</p>
+
+<h1 align="center">Penumbra</h1>
+
+<p align="center">A game-streaming client for <a href="https://github.com/ClassicOldSong/Apollo">Apollo</a>/<a href="https://github.com/LizardByte/Sunshine">Sunshine</a>, tuned for Android gaming handhelds.</p>
+
+Penumbra is a fork of [Artemis](https://github.com/ClassicOldSong/moonlight-android) (itself a fork of [Moonlight](https://github.com/moonlight-stream/moonlight-android)). It is built for Android handhelds such as the Retroid Pocket, AYN Odin/Thor and Ayaneo devices.
+
+## Goals
+
+- **Rendered frame rate matches the stream:** fix the drop where frames are presented below the incoming stream rate, and tighten frame pacing and the decode-to-display path.
+- **Tuned for handhelds:** defaults that suit handheld screens, controllers and thermals.
+- **New streaming features:** latency and quality improvements beyond upstream.
+
+> Work in progress. Penumbra stays GPL-3.0 like its upstreams, and all credit for the base client goes to the Moonlight and Artemis authors.
+
+---
+
+## Upstream: Artemis Android
 
 Previously named Moonlight Noir
 
