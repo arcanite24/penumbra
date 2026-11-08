@@ -186,6 +186,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     public NvConnection conn;
     private SpinnerDialog spinner;
     private boolean displayedFailureDialog = false;
+    private boolean confirmedAppReplacement = false;
     private boolean connecting = false;
     public boolean connected = false;
     private boolean autoEnterPip = false;
@@ -3484,6 +3485,45 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     @Override
     public boolean stageFailed(final String stage, final int portFlags, final int errorCode) {
+        // Vibepollo answers 410 Gone when another app is still running on the host and wants
+        // the launch repeated within 60 seconds as confirmation. Ask, then retry.
+        if (errorCode == 410 && !confirmedAppReplacement) {
+            final java.util.concurrent.CountDownLatch answered = new java.util.concurrent.CountDownLatch(1);
+            final boolean[] replace = {false};
+            runOnUiThread(() -> {
+                if (spinner != null) {
+                    spinner.setMessage(getResources().getString(R.string.app_replace_waiting));
+                }
+                new android.app.AlertDialog.Builder(Game.this)
+                        .setTitle(R.string.app_replace_title)
+                        .setMessage(getResources().getString(R.string.app_replace_message, stage))
+                        .setCancelable(false)
+                        .setPositiveButton(R.string.app_replace_confirm, (d, w) -> {
+                            replace[0] = true;
+                            answered.countDown();
+                        })
+                        .setNegativeButton(R.string.cancel, (d, w) -> answered.countDown())
+                        .show();
+            });
+            try {
+                answered.await();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            if (replace[0]) {
+                confirmedAppReplacement = true;
+                return true;
+            }
+            runOnUiThread(() -> {
+                if (spinner != null) {
+                    spinner.dismiss();
+                    spinner = null;
+                }
+                finish();
+            });
+            return false;
+        }
+
         // Perform a connection test if the failure could be due to a blocked port
         // This does network I/O, so don't do it on the main thread.
         final int portTestResult = MoonBridge.testClientConnectivity(ServerHelper.CONNECTION_TEST_SERVER, 443, portFlags);

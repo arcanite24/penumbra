@@ -9,9 +9,7 @@ import android.os.Looper;
 import android.text.TextUtils;
 import android.view.ContextThemeWrapper;
 import android.view.View;
-import android.view.ViewTreeObserver;
 import android.view.Window;
-import android.widget.ArrayAdapter;
 import android.widget.Toast;
 
 import com.limelight.binding.input.GameInputDevice;
@@ -107,48 +105,97 @@ public class GameMenu implements Game.GameMenuCallbacks {
 
     private void showMenuDialog(String title, MenuOption[] options) {
         int themeResId = game.getApplicationInfo().theme;
-
         Context themedContext = new ContextThemeWrapper(dialogScreenContext, themeResId);
-        AlertDialog.Builder builder = new AlertDialog.Builder(themedContext);
-        builder.setTitle(title);
+        float density = themedContext.getResources().getDisplayMetrics().density;
 
-        final ArrayAdapter<String> actions = new ArrayAdapter<>(themedContext, android.R.layout.simple_list_item_1);
+        // Penumbra (PEN-3): glass panel with the actions in a two-column grid
+        View root = android.view.LayoutInflater.from(themedContext).inflate(R.layout.game_menu, null);
+        ((android.widget.TextView) root.findViewById(R.id.game_menu_title)).setText(title);
+        android.widget.LinearLayout grid = root.findViewById(R.id.game_menu_items);
 
-        builder.setAdapter(actions, (dialog, which) -> {
-            String label = actions.getItem(which);
-            for (MenuOption option : options) {
-                if (label != null && label.equals(option.label)) {
-                    run(option);
-                    break;
+        final AlertDialog[] dialogRef = new AlertDialog[1];
+        String quitLabel = getString(R.string.game_menu_quit_session);
+        String disconnectLabel = getString(R.string.game_menu_disconnect);
+        int gap = Math.round(8 * density);
+        android.widget.LinearLayout row = null;
+        View first = null;
+        for (int i = 0; i < options.length; i++) {
+            final MenuOption option = options[i];
+            if (i % 2 == 0) {
+                row = new android.widget.LinearLayout(themedContext);
+                row.setOrientation(android.widget.LinearLayout.HORIZONTAL);
+                android.widget.LinearLayout.LayoutParams rowParams = new android.widget.LinearLayout.LayoutParams(
+                        android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.WRAP_CONTENT);
+                if (i > 0) {
+                    rowParams.topMargin = gap;
                 }
+                grid.addView(row, rowParams);
             }
-        });
+            android.widget.TextView item = (android.widget.TextView) android.view.LayoutInflater.from(themedContext)
+                    .inflate(R.layout.game_menu_item, row, false);
+            item.setText(option.label);
+            if (option.label.equals(quitLabel)) {
+                item.setTextColor(0xFFFF8FA6);
+            } else if (option.label.equals(disconnectLabel)) {
+                item.setTextColor(0xFFFFD58A);
+            }
+            if (i % 2 == 1) {
+                ((android.widget.LinearLayout.LayoutParams) item.getLayoutParams()).setMarginStart(gap);
+            }
+            item.setOnClickListener(v -> {
+                if (dialogRef[0] != null) {
+                    dialogRef[0].dismiss();
+                }
+                if (currentDialog == dialogRef[0]) {
+                    currentDialog = null;
+                }
+                run(option);
+            });
+            row.addView(item);
+            if (first == null) {
+                first = item;
+            }
 
+            // Items rise in one after another
+            item.setAlpha(0f);
+            item.setTranslationY(10 * density);
+            item.animate().alpha(1f).translationY(0f).setStartDelay(20L * i).setDuration(220)
+                    .setInterpolator(new android.view.animation.DecelerateInterpolator(2f)).start();
+        }
+        if (row != null && options.length % 2 == 1) {
+            // Keep the last odd item at half width
+            View spacer = new View(themedContext);
+            android.widget.LinearLayout.LayoutParams sp = new android.widget.LinearLayout.LayoutParams(0, 1, 1f);
+            sp.setMarginStart(gap);
+            row.addView(spacer, sp);
+        }
+
+        AlertDialog.Builder builder = new AlertDialog.Builder(themedContext);
+        builder.setView(root);
         builder.setOnCancelListener(dialog -> hideMenu());
 
         if (currentDialog != null) {
             currentDialog.dismiss();
         }
-        currentDialog = builder.show();
+        currentDialog = builder.create();
+        dialogRef[0] = currentDialog;
 
         Window window = currentDialog.getWindow();
-
         if (window != null) {
-            View decorView = window.getDecorView();
-            decorView.getViewTreeObserver().addOnGlobalLayoutListener(new ViewTreeObserver.OnGlobalLayoutListener() {
-                @Override
-                public void onGlobalLayout() {
-
-                    decorView.getViewTreeObserver().removeOnGlobalLayoutListener(this);
-
-                    new Handler(Looper.getMainLooper()).post(() -> {
-                        for (MenuOption option : options) {
-                            actions.add(option.label);
-                        }
-                        actions.notifyDataSetChanged();
-                    });
-                }
-            });
+            window.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT));
+            window.setDimAmount(0.55f);
+        }
+        currentDialog.show();
+        if (window != null) {
+            int maxWidth = themedContext.getResources().getDisplayMetrics().widthPixels - Math.round(32 * density);
+            window.setLayout(Math.min(Math.round(560 * density), maxWidth),
+                    android.view.WindowManager.LayoutParams.WRAP_CONTENT);
+        }
+        if (first != null) {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                first.setFocusedByDefault(true);
+            }
+            first.requestFocus();
         }
     }
 

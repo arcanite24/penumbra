@@ -1,15 +1,33 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Penumbra profile row (PEN-3) -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
+    android:layout_marginBottom="10dp"
+    android:background="@drawable/profile_row_bg"
+    android:clickable="true"
+    android:focusable="true"
+    android:gravity="center_vertical"
     android:orientation="horizontal"
-    android:padding="16dp"
-    android:background="?android:attr/selectableItemBackground"
-    android:gravity="center_vertical">
+    android:paddingStart="14dp"
+    android:paddingTop="12dp"
+    android:paddingEnd="12dp"
+    android:paddingBottom="12dp">
+
+    <TextView
+        android:id="@+id/profileInitial"
+        android:layout_width="40dp"
+        android:layout_height="40dp"
+        android:background="@drawable/home_play_button"
+        android:fontFamily="sans-serif-medium"
+        android:gravity="center"
+        android:textColor="#050418"
+        android:textSize="18sp" />
 
     <LinearLayout
         android:layout_width="0dp"
         android:layout_height="wrap_content"
+        android:layout_marginStart="14dp"
         android:layout_weight="1"
         android:orientation="vertical">
 
@@ -17,45 +35,49 @@
             android:id="@+id/profileName"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:textColor="#FFFFFF"
-            android:textSize="16sp"
-            android:textStyle="bold"
+            android:ellipsize="end"
+            android:fontFamily="sans-serif-medium"
             android:singleLine="true"
-            android:ellipsize="end" />
+            android:textColor="#FFFFFF"
+            android:textSize="17sp" />
 
         <TextView
             android:id="@+id/profileTimestamp"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:textColor="#CCCCCC"
+            android:layout_marginTop="2dp"
+            android:textColor="#99E8E6FF"
             android:textSize="12sp" />
-
     </LinearLayout>
 
-    <RadioButton
+    <TextView
         android:id="@+id/profileActive"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginStart="8dp"
-        android:layout_marginLeft="8dp"
+        style="@style/HomeChip"
+        android:layout_height="36dp"
         android:layout_marginEnd="8dp"
-        android:layout_marginRight="8dp" />
+        android:minWidth="84dp" />
 
     <ImageButton
         android:id="@+id/editProfile"
-        android:layout_width="48dp"
-        android:layout_height="48dp"
-        android:background="?android:attr/selectableItemBackgroundBorderless"
-        android:contentDescription="Edit profile"
-        android:src="@drawable/ic_edit" />
+        android:layout_width="40dp"
+        android:layout_height="40dp"
+        android:layout_marginStart="4dp"
+        android:background="@drawable/home_icon_button"
+        android:contentDescription="@string/profile_manager_edit_profile"
+        android:padding="10dp"
+        android:scaleType="fitCenter"
+        android:src="@drawable/ic_edit"
+        android:tint="#E8E6FF" />
 
     <ImageButton
         android:id="@+id/deleteProfile"
-        android:layout_width="48dp"
-        android:layout_height="48dp"
-        android:background="?android:attr/selectableItemBackgroundBorderless"
-        android:contentDescription="Delete profile"
-        android:src="@drawable/ic_delete" />
-
+        android:layout_width="40dp"
+        android:layout_height="40dp"
+        android:layout_marginStart="8dp"
+        android:background="@drawable/home_icon_button"
+        android:contentDescription="@string/profile_manager_delete"
+        android:padding="10dp"
+        android:scaleType="fitCenter"
+        android:src="@drawable/ic_delete"
+        android:tint="#FF8FA6" />
 </LinearLayout>

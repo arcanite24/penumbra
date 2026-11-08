@@ -712,7 +712,7 @@
     <string name="profile_manager_new_profile_with">New Profile: %s</string>
     <string name="profile_manager_no_profiles_yet">No profiles yet</string>
     <string name="profile_manager_profiles_description">Profiles allow you to create and save different streaming configurations. Each profile stores its own settings which can be quickly switched between.</string>
-    <string name="profile_manager_tap_create_profile">Tap + to create your first profile</string>s
+    <string name="profile_manager_tap_create_profile">Choose New Profile to save your first set of settings</string>
     <string name="profile_manager_choose_profile">Choose Profile</string>
     <string name="profile_manager_deactivated_profile">Deactivated profile</string>
     <string name="profile_manager_activated_profile">Activated profile \'%s\'</string>
@@ -799,4 +799,12 @@
     <string name="pc_status_unpaired">Not paired · select to pair</string>
     <string name="pc_status_offline">Offline</string>
     <string name="pc_status_checking">Checking…</string>
+
+    <!-- Penumbra: host asks to confirm closing the running app (Vibepollo 410) -->
+    <string name="profile_use">Use</string>
+    <string name="profile_in_use">In use</string>
+    <string name="app_replace_title">Another app is running</string>
+    <string name="app_replace_message">The host is still running another app. Close it and start %1$s?</string>
+    <string name="app_replace_confirm">Close and start</string>
+    <string name="app_replace_waiting">Switching apps…</string>
 </resources>

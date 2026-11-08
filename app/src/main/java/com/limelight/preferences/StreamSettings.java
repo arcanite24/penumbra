@@ -65,7 +65,7 @@ import java.util.Arrays;
 import java.util.Iterator;
 import java.util.Map;
 
-public class StreamSettings extends AppCompatActivity {
+public class StreamSettings extends AppCompatActivity implements SettingsSectionRail.Host {
     private PreferenceConfiguration previousPrefs;
     private int previousDisplayPixelCount;
 
@@ -108,120 +108,14 @@ public class StreamSettings extends AppCompatActivity {
 //        UiHelper.notifyNewRootView(this);
     }
 
-    // ---------------------------------------------------------------------------------------
-    // Section rail (PEN-3): the preference tree stays one screen so all the existing
-    // findPreference()/removePreference() logic keeps working; we only show one group of
-    // top-level categories at a time.
-    // ---------------------------------------------------------------------------------------
+    private SettingsSectionRail sectionRail;
 
-    private static final class Section {
-        final int title, subtitle, icon;
-        final String[] categories;
-
-        Section(int title, int subtitle, int icon, String... categories) {
-            this.title = title;
-            this.subtitle = subtitle;
-            this.icon = icon;
-            this.categories = categories;
+    @Override
+    public void onSettingsReady(SettingsFragment fragment) {
+        if (sectionRail == null) {
+            sectionRail = new SettingsSectionRail(this, findViewById(R.id.settingsSections));
         }
-    }
-
-    private static final Section[] SECTIONS = {
-            new Section(R.string.section_stream, R.string.section_stream_sub, R.drawable.ic_section_stream,
-                    "category_video_settings", "category_video_tuning"),
-            new Section(R.string.section_audio, R.string.section_audio_sub, R.drawable.ic_section_audio,
-                    "category_audio_settings"),
-            new Section(R.string.section_controllers, R.string.section_controllers_sub, R.drawable.ic_section_controllers,
-                    "category_gamepad_settings"),
-            new Section(R.string.section_mouse, R.string.section_mouse_sub, R.drawable.ic_section_mouse,
-                    "category_input_settings"),
-            new Section(R.string.section_touch, R.string.section_touch_sub, R.drawable.ic_section_touch,
-                    "category_onscreen_controls", "category_special_key_layout", "category_virtual_trackpad_settings"),
-            new Section(R.string.section_host, R.string.section_host_sub, R.drawable.ic_section_host,
-                    "category_host_settings", "category_clipboard_settings"),
-            new Section(R.string.section_interface, R.string.section_interface_sub, R.drawable.ic_section_interface,
-                    "category_ui_settings"),
-            new Section(R.string.section_overlay, R.string.section_overlay_sub, R.drawable.ic_section_overlay,
-                    "category_perf_monitor_settings"),
-            new Section(R.string.section_advanced, R.string.section_advanced_sub, R.drawable.ic_section_advanced,
-                    "category_advanced_settings"),
-            new Section(R.string.section_about, R.string.section_about_sub, R.drawable.ic_section_about,
-                    "category_settings_misc"),
-    };
-
-    private int currentSection = 0;
-    private final java.util.ArrayList<View> sectionViews = new java.util.ArrayList<>();
-
-    void onSettingsReady(SettingsFragment fragment) {
-        ViewGroup rail = findViewById(R.id.settingsSections);
-        rail.removeAllViews();
-        sectionViews.clear();
-
-        LayoutInflater inflater = LayoutInflater.from(this);
-        for (int i = 0; i < SECTIONS.length; i++) {
-            Section section = SECTIONS[i];
-            boolean present = false;
-            for (String key : section.categories) {
-                present |= fragment.findPreference(key) != null;
-            }
-            View item = inflater.inflate(R.layout.settings_section_item, rail, false);
-            ((android.widget.ImageView) item.findViewById(R.id.section_icon)).setImageResource(section.icon);
-            ((android.widget.TextView) item.findViewById(R.id.section_title)).setText(section.title);
-            ((android.widget.TextView) item.findViewById(R.id.section_subtitle)).setText(section.subtitle);
-            final int index = i;
-            item.setOnClickListener(v -> showSection(index));
-            // With a controller, moving through the rail previews each section
-            item.setOnFocusChangeListener((v, hasFocus) -> {
-                if (hasFocus && index != currentSection) {
-                    showSection(index);
-                }
-            });
-            item.setVisibility(present ? View.VISIBLE : View.GONE);
-            sectionViews.add(item);
-            rail.addView(item);
-
-            // Rail items glide in one after another
-            item.setAlpha(0f);
-            item.setTranslationX(-dp(24));
-            item.animate().alpha(1f).translationX(0f).setStartDelay(30L * i).setDuration(320)
-                    .setInterpolator(new android.view.animation.DecelerateInterpolator(2f)).start();
-        }
-
-        if (currentSection >= SECTIONS.length || sectionViews.get(currentSection).getVisibility() != View.VISIBLE) {
-            currentSection = 0;
-        }
-        showSection(currentSection);
-        sectionViews.get(currentSection).requestFocus();
-    }
-
-    private int dp(float v) {
-        return Math.round(v * getResources().getDisplayMetrics().density);
-    }
-
-    private void showSection(int index) {
-        if (prefsFragment == null || prefsFragment.getPreferenceScreen() == null) {
-            return;
-        }
-        currentSection = index;
-        for (int i = 0; i < sectionViews.size(); i++) {
-            sectionViews.get(i).setSelected(i == index);
-        }
-
-        java.util.List<String> keys = Arrays.asList(SECTIONS[index].categories);
-        PreferenceScreen screen = prefsFragment.getPreferenceScreen();
-        for (int i = 0; i < screen.getPreferenceCount(); i++) {
-            Preference p = screen.getPreference(i);
-            p.setVisible(p.getKey() != null && keys.contains(p.getKey()));
-        }
-
-        androidx.recyclerview.widget.RecyclerView list = prefsFragment.getListView();
-        if (list != null) {
-            list.scrollToPosition(0);
-            list.setAlpha(0f);
-            list.setTranslationY(dp(16));
-            list.animate().alpha(1f).translationY(0f).setDuration(260)
-                    .setInterpolator(new android.view.animation.DecelerateInterpolator(2f)).start();
-        }
+        sectionRail.attach(fragment);
     }
 
     @Override
@@ -469,11 +363,13 @@ public class StreamSettings extends AppCompatActivity {
             list.setPadding(list.getPaddingLeft(), Math.round(8 * getResources().getDisplayMetrics().density),
                     list.getPaddingRight(), Math.round(24 * getResources().getDisplayMetrics().density));
             list.setVerticalScrollBarEnabled(false);
+            // Section swaps fade the whole panel; per-row change animations made it flicker
+            list.setItemAnimator(null);
             if (getPreferenceScreen() != null) {
                 showListValues(getPreferenceScreen());
             }
-            if (getActivity() instanceof StreamSettings) {
-                ((StreamSettings) getActivity()).onSettingsReady(this);
+            if (getActivity() instanceof SettingsSectionRail.Host) {
+                ((SettingsSectionRail.Host) getActivity()).onSettingsReady(this);
             }
         }
 
