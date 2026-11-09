@@ -967,6 +967,13 @@
             android:summary="@string/summary_checkbox_enable_perf_overlay_bottom"
             android:title="@string/title_checkbox_enable_perf_overlay_bottom"
             app:iconSpaceReserved="false" />
+        <CheckBoxPreference
+            android:defaultValue="true"
+            android:dependency="checkbox_enable_perf_overlay"
+            android:key="checkbox_perf_overlay_latency"
+            android:summary="@string/summary_checkbox_perf_overlay_latency"
+            android:title="@string/title_checkbox_perf_overlay_latency"
+            app:iconSpaceReserved="false" />
 
         <CheckBoxPreference
             android:defaultValue="false"
