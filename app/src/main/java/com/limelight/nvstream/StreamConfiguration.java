@@ -17,6 +17,7 @@ public class StreamConfiguration {
     private boolean virtualDisplay;
     private int resolutionScaleFactor;
     private int clientRefreshRateX100;
+    private int clientRefreshRateUhz;
     private int bitrate;
     private boolean sops;
     private boolean enableAdaptiveResolution;
@@ -245,6 +246,20 @@ public class StreamConfiguration {
 
     public int getClientRefreshRateX100() {
         return clientRefreshRateX100;
+    }
+
+    // Set once the display's refresh rate has been measured, before the connection starts
+    public void setClientRefreshRateX100(int refreshRateX100) {
+        clientRefreshRateX100 = refreshRateX100;
+    }
+
+    // The same rate in microhertz, or 0 when it's only known to hundredths
+    public int getClientRefreshRateUhz() {
+        return clientRefreshRateUhz;
+    }
+
+    public void setClientRefreshRateUhz(int refreshRateUhz) {
+        clientRefreshRateUhz = refreshRateUhz;
     }
 
     public int getColorRange() {

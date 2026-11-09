@@ -28,6 +28,8 @@ import com.limelight.binding.video.CrashListener;
 import com.limelight.binding.video.MediaCodecDecoderRenderer;
 import com.limelight.binding.video.MediaCodecHelper;
 import com.limelight.binding.video.PerfOverlayListener;
+import com.limelight.binding.video.DisplayRefreshMeter;
+import com.limelight.binding.video.HostClockRates;
 import com.limelight.nvstream.NvConnection;
 import com.limelight.nvstream.NvConnectionListener;
 import com.limelight.nvstream.StreamConfiguration;
@@ -197,6 +199,11 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private String appName;
     private NvApp app;
     private float desiredRefreshRate;
+    // The display the stream is shown on, and the stream's configuration, which gets the frame
+    // rate for the host to run at once the display's refresh rate is measured
+    private Display streamDisplay;
+    private StreamConfiguration streamConfig;
+    private DisplayRefreshMeter refreshMeter;
 
     private InputCaptureProvider inputCaptureProvider;
     private int modifierFlags = 0;
@@ -440,6 +447,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         }
 
         onExternelDisplay = currentDisplay.getDisplayId() != Display.DEFAULT_DISPLAY;
+        streamDisplay = currentDisplay;
 
         boolean shouldInvertDecoderResolution = false;
 
@@ -861,6 +869,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 .setColorRange(decoderRenderer.getPreferredColorRange())
                 .setPersistGamepadsAfterDisconnect(!prefConfig.multiController)
                 .build();
+        streamConfig = config;
 
         // Initialize the connection
         conn = new NvConnection(getApplicationContext(),
@@ -927,15 +936,15 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
         streamContainer.setOnSurfaceAvailable(() -> {
             if (!attemptedConnection) {
-                LimeLog.info("Surface is available, starting connection...");
+                LimeLog.info("Surface is available, measuring the display before connecting...");
                 attemptedConnection = true;
 
-                // Der Decoder erhält die jeweils aktive Oberfläche vom Container
-                decoderRenderer.setRenderTarget(streamContainer.getSurface());
-
-                // Starten Sie die NvConnection
-                conn.start(new AndroidAudioRenderer(Game.this, prefConfig.playHostAudio),
-                        decoderRenderer, Game.this);
+                // Measure the display's actual refresh rate first, now that its mode is set, so
+                // the host can be asked for a frame rate that lines up with our vsyncs
+                refreshMeter = DisplayRefreshMeter.measure(streamDisplay, refreshHz -> {
+                    refreshMeter = null;
+                    startConnection(refreshHz);
+                });
             }
         });
 
@@ -3492,8 +3501,72 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     public void stageComplete(String stage) {
     }
 
+    // The frame rate for the host to run at, to line up with the display: its measured refresh
+    // rate (or nominal one, if that couldn't be measured) over the vsyncs each frame is shown for,
+    // allowing for how fast the host's clock ran in its last stream
+    private void applyHostFrameRate(double measuredRefreshHz) {
+        if (prefConfig.framePacingWarpFactor > 0) {
+            // The frame rate is deliberately off the display's: leave it as configured
+            return;
+        }
+
+        double refreshHz = measuredRefreshHz > 0 ? measuredRefreshHz : streamDisplay.getRefreshRate();
+        double hostRate = DisplayRefreshMeter.streamMatchedRate(refreshHz, streamConfig.getRefreshRate());
+        if (hostRate <= 0) {
+            // No host rate lines up with our vsyncs (90 FPS at 120 Hz): ask for none
+            streamConfig.setClientRefreshRateX100(0);
+            streamConfig.setClientRefreshRateUhz(0);
+            LimeLog.info(String.format(Locale.ROOT, "Stream at %.2f FPS doesn't divide the %.4f Hz display; no exact rate sent",
+                    streamConfig.getRefreshRate(), refreshHz));
+            return;
+        }
+
+        // The host paces frames on its own clock, so undo how far off ours that runs
+        String computerUuid = getIntent().getStringExtra(EXTRA_PC_UUID);
+        double hostClockPpm = HostClockRates.get(this, computerUuid);
+        double requestHz = HostClockRates.hostRequestHz(hostRate, hostClockPpm);
+        streamConfig.setClientRefreshRateX100((int) Math.round(requestHz * 100));
+        streamConfig.setClientRefreshRateUhz((int) Math.round(requestHz * 1e6));
+        LimeLog.info(String.format(Locale.ROOT,
+                "Asking the host for %.6f FPS (%.6f on our clock, display %.4f Hz %s, host clock %+.1f ppm)",
+                requestHz, hostRate, refreshHz, measuredRefreshHz > 0 ? "measured" : "nominal", hostClockPpm));
+    }
+
+    private void startConnection(double measuredRefreshHz) {
+        if (isFinishing() || conn == null) {
+            return;
+        }
+        Surface surface = streamContainer.getSurface();
+        if (surface != null && !surface.isValid()) {
+            // The surface went away while measuring; start when it's back
+            LimeLog.info("Surface gone before the connection started; waiting for it");
+            attemptedConnection = false;
+            return;
+        }
+
+        applyHostFrameRate(measuredRefreshHz);
+
+        // Der Decoder erhält die jeweils aktive Oberfläche vom Container
+        decoderRenderer.setRenderTarget(surface);
+
+        // Starten Sie die NvConnection
+        conn.start(new AndroidAudioRenderer(Game.this, prefConfig.playHostAudio),
+                decoderRenderer, Game.this);
+    }
+
     private void stopConnection() {
+        if (refreshMeter != null) {
+            refreshMeter.cancel();
+            refreshMeter = null;
+        }
         if (connecting || connected) {
+            if (connected) {
+                // Measured over the stream, for the next one to ask for a rate that allows for it
+                double[] hostClock = MoonBridge.getHostClockRate();
+                if (hostClock != null) {
+                    HostClockRates.save(this, getIntent().getStringExtra(EXTRA_PC_UUID), hostClock[0], hostClock[1]);
+                }
+            }
             connecting = connected = false;
             updatePipAutoEnter();
 
@@ -3945,6 +4018,13 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     public void surfaceDestroyed(SurfaceHolder holder) {
         if (!surfaceCreated) {
             throw new IllegalStateException("Surface destroyed before creation!");
+        }
+
+        if (refreshMeter != null) {
+            // The connection hadn't started yet. It starts when the surface is back.
+            refreshMeter.cancel();
+            refreshMeter = null;
+            attemptedConnection = false;
         }
 
         if (attemptedConnection) {
