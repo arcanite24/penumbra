@@ -868,6 +868,32 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             MediaFormat mediaFormat = createBaseMediaFormat(mimeType);
             // This will try low latency options until we find one that works (or we give up).
             boolean newFormat = MediaCodecHelper.setDecoderLowLatencyOptions(mediaFormat, selectedDecoderInfo, prefs.enableUltraLowLatency, tryNumber);
+
+            // PEN-10: ask for an input buffer that fits high-bitrate frames. The decoder's own
+            // default is only known after configure, so AUTO asks whenever the stream has an
+            // estimate and configures again without the request if the decoder refuses it.
+            int inputSize = DecoderInputBufferSizing.requestedInputSize(prefs.decoderInputBufferMode,
+                    mimeType, initialWidth, initialHeight, prefs.bitrate, Math.round(prefs.fps), 0);
+            if (inputSize > 0) {
+                mediaFormat.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, inputSize);
+                if (tryConfigureDecoder(selectedDecoderInfo, mediaFormat,
+                        !newFormat && throwOnCodecError && !DecoderInputBufferSizing.retryWithoutRequest(prefs.decoderInputBufferMode, inputSize))) {
+                    requestedInputBufferSize = inputSize;
+                    logInputBufferSize(inputSize);
+                    break;
+                }
+                if (DecoderInputBufferSizing.retryWithoutRequest(prefs.decoderInputBufferMode, inputSize)) {
+                    LimeLog.warning("Decoder refused KEY_MAX_INPUT_SIZE=" + inputSize + ", configuring without it");
+                    mediaFormat = createBaseMediaFormat(mimeType);
+                    MediaCodecHelper.setDecoderLowLatencyOptions(mediaFormat, selectedDecoderInfo, prefs.enableUltraLowLatency, tryNumber);
+                } else {
+                    if (!newFormat) {
+                        return -5;
+                    }
+                    continue;
+                }
+            }
+            requestedInputBufferSize = 0;
             //todo 色彩格式
 //            MediaCodecInfo.CodecCapabilities codecCapabilities = selectedDecoderInfo.getCapabilitiesForType(mimeType);
 //            int[] colorFormats=codecCapabilities.colorFormats;
@@ -877,6 +903,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             // Throw the underlying codec exception on the last attempt if the caller requested it
             if (tryConfigureDecoder(selectedDecoderInfo, mediaFormat, !newFormat && throwOnCodecError)) {
                 // Success!
+                logInputBufferSize(0);
                 break;
             }
 
@@ -2181,6 +2208,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         numFramesIn++;
 
         if (decodeUnitLength > nextInputBuffer.limit() - nextInputBuffer.position()) {
+            if (growInputBuffer(nextInputBuffer.position() + decodeUnitLength, nextInputBuffer.limit())) {
+                // Quiesce and restart now; this drops the half-filled input buffer
+                doCodecRecoveryIfRequired(CR_FLAG_INPUT_THREAD);
+                return MoonBridge.DR_NEED_IDR;
+            }
             IllegalArgumentException exception = new IllegalArgumentException(
                     "Decode unit length "+decodeUnitLength+" too large for input buffer "+nextInputBuffer.limit());
             if (!reportedCrash) {
@@ -2276,6 +2308,49 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
      * {decoderTimeMs, framesReceived, framesRendered, totalFrames, framesLost, uptimeMs}.
      * Updated about once a second when the stats window flips.
      */
+    // KEY_MAX_INPUT_SIZE we asked the decoder for, 0 when we left its default (PEN-10)
+    private int requestedInputBufferSize;
+
+    private void logInputBufferSize(int requested) {
+        String actual = "unknown";
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && videoDecoder != null) {
+            try {
+                MediaFormat input = videoDecoder.getInputFormat();
+                if (input.containsKey(MediaFormat.KEY_MAX_INPUT_SIZE)) {
+                    actual = String.valueOf(input.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE));
+                }
+            } catch (RuntimeException ignored) {
+            }
+        }
+        LimeLog.info("Decoder MediaFormat: KEY_MAX_INPUT_SIZE=" + (requested > 0 ? String.valueOf(requested) : "default")
+                + " (decoder reports " + actual + ", mode " + prefs.decoderInputBufferMode + ")");
+    }
+
+    /**
+     * A frame didn't fit the input buffer: ask for a bigger one and restart the decoder instead of
+     * ending the stream. Returns false when growing can't help.
+     */
+    private boolean growInputBuffer(int requiredSize, int capacity) {
+        if (prefs.decoderInputBufferMode == DecoderInputBufferSizing.MODE_OFF
+                || codecRecoveryAttempts >= CR_MAX_TRIES || configuredFormat == null) {
+            return false;
+        }
+        int newSize = DecoderInputBufferSizing.expandedInputSize(requiredSize, capacity, requestedInputBufferSize);
+        if (newSize <= 0) {
+            return false;
+        }
+        LimeLog.warning("Growing decoder input buffer: frame of " + requiredSize + " bytes, buffer "
+                + capacity + ", restarting with KEY_MAX_INPUT_SIZE=" + newSize);
+        // Set the format before asking for the restart, which reconfigures with configuredFormat.
+        // If a reset is already pending it uses this format too.
+        configuredFormat.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, newSize);
+        requestedInputBufferSize = newSize;
+        if (!codecRecoveryType.compareAndSet(CR_RECOVERY_TYPE_NONE, CR_RECOVERY_TYPE_RESTART)) {
+            codecRecoveryType.compareAndSet(CR_RECOVERY_TYPE_FLUSH, CR_RECOVERY_TYPE_RESTART);
+        }
+        return true;
+    }
+
     // Stream bitrate for the stats overlay (PEN-10); null hides the line
     private volatile String streamBitrateLabel;
 

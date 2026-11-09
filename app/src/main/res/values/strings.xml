@@ -835,6 +835,11 @@
     <string name="bitrate_failed">Couldn\'t change the bitrate: %1$s</string>
     <string name="title_auto_bitrate">Automatic bitrate</string>
     <string name="summary_auto_bitrate">Lowers the bitrate when frames get lost and raises it again after a clean minute, never above the bitrate set here. Needs a host that changes the bitrate live (Vibepollo), and stays off if the host adapts the bitrate itself. The limit is remembered for each network.</string>
+    <string name="title_decoder_input_buffer">Decoder input buffer</string>
+    <string name="summary_decoder_input_buffer">Size of the buffer each compressed frame is copied into. Automatic asks for a buffer that fits high-bitrate frames and grows it if a frame doesn\'t fit. Off keeps the decoder\'s own size.</string>
+    <string name="decoder_input_buffer_auto">Automatic</string>
+    <string name="decoder_input_buffer_force">Always request</string>
+    <string name="decoder_input_buffer_off">Off (decoder default)</string>
     <string name="title_pyrowave_pace">PyroWave frame pace</string>
     <string name="summary_pyrowave_pace">How fast the host sends each frame\'s packets. The Tune wizard measures it with the host\'s UDP burst test; 0 leaves it to the host.</string>
     <string name="suffix_pyrowave_pace">Mbps</string>

@@ -378,6 +378,8 @@ public class PreferenceConfiguration {
     public static final int PYROWAVE_LATE_FRAMES_BALANCED = 1;
     public static final int PYROWAVE_LATE_FRAMES_SMOOTH = 2;
     public int pyrowaveLateFrames = PYROWAVE_LATE_FRAMES_BALANCED;
+    // DecoderInputBufferSizing.MODE_* (PEN-10)
+    public int decoderInputBufferMode = 0;
     public boolean pyrowaveFrontBuffer;
     public boolean pyrowaveGpuBoost;
     /** Frame pace for PyroWave streams from the Tune wizard's UDP test, Mbps; 0: the host's default (PEN-10). */
@@ -876,6 +878,8 @@ private static int getFramePacingValue(Context context) {
 
         config.videoFormat = getVideoFormatValue(context);
         config.framePacing = getFramePacingValue(context);
+        config.decoderInputBufferMode = com.limelight.binding.video.DecoderInputBufferSizing.modeFromPreference(
+                prefs.getString("decoder_input_buffer", "auto"));
         {
             String lateFrames = prefs.getString("pyrowave_late_frames", "balanced");
             config.pyrowaveLateFrames = "off".equals(lateFrames) ? PYROWAVE_LATE_FRAMES_OFF :
