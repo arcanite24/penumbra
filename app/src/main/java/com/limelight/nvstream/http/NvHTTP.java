@@ -436,6 +436,13 @@ public class NvHTTP {
 
         details.serverCommands = getServerCmds(serverInfo);
 
+        // Vibepollo: hardware metrics for the stats overlay, and the paired-host sleep action.
+        // Only answered over HTTPS to a paired client; absent on other hosts.
+        details.hardwareMetricsVersion = getXmlInt(serverInfo, "HardwareMetricsVersion");
+        details.powerActionVersion = getXmlInt(serverInfo, "PowerActionVersion");
+        details.sleepSupported = getXmlInt(serverInfo, "SleepSupported") == 1;
+        details.sleepAllowed = getXmlInt(serverInfo, "SleepAllowed") == 1;
+
         details.pairState = getPairState(serverInfo);
         details.runningGameId = getCurrentGame(serverInfo);
         details.runningGameUUID = getCurrentGameUUID(serverInfo);
@@ -540,6 +547,23 @@ public class NvHTTP {
             
             throw e;
         }
+    }
+
+    private static int getXmlInt(String xml, String tag) throws XmlPullParserException, IOException {
+        String str = getXmlString(xml, tag, false);
+        if (str == null) {
+            return 0;
+        }
+        try {
+            return Integer.parseInt(str.trim());
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    /** Vibepollo's host hardware metrics (JSON), for hosts advertising HardwareMetricsVersion */
+    public String getHardwareMetrics() throws IOException {
+        return openHttpConnectionToString(httpClientShortConnectTimeout, getHttpsUrl(true), "api/hardware-metrics");
     }
 
     public String getServerVersion(String serverInfo) throws XmlPullParserException, IOException {

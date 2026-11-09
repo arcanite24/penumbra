@@ -978,6 +978,14 @@
         <CheckBoxPreference
             android:defaultValue="false"
             android:dependency="checkbox_enable_perf_overlay"
+            android:key="checkbox_perf_overlay_host_metrics"
+            android:summary="@string/summary_checkbox_perf_overlay_host_metrics"
+            android:title="@string/title_checkbox_perf_overlay_host_metrics"
+            app:iconSpaceReserved="false" />
+
+        <CheckBoxPreference
+            android:defaultValue="false"
+            android:dependency="checkbox_enable_perf_overlay"
             android:key="checkbox_enable_perf_logging"
             android:summary="@string/summary_checkbox_enable_perf_logging"
             android:title="@string/title_checkbox_enable_perf_logging"

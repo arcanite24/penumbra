@@ -89,6 +89,11 @@ public class NvConnection {
         return new SecureRandom().nextInt();
     }
 
+    /** The host's hardware-metrics version from serverinfo; 0 when it offers none */
+    public int getHostHardwareMetricsVersion() {
+        return context.hostHardwareMetricsVersion;
+    }
+
     public void stop() {
         // Interrupt any pending connection. This is thread-safe.
         MoonBridge.interruptConnection();
@@ -236,6 +241,7 @@ public class NvConnection {
 
         ComputerDetails details = h.getComputerDetails(serverInfo);
         context.isNvidiaServerSoftware = details.nvidiaServer;
+        context.hostHardwareMetricsVersion = details.hardwareMetricsVersion;
 
         // May be missing for older servers
         context.serverGfeVersion = h.getGfeVersion(serverInfo);

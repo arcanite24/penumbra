@@ -315,6 +315,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private boolean clipboardSyncRunning = false;
 
     private NvHTTP httpConn;
+    private volatile com.limelight.utils.HostHardwareMetrics hostMetrics;
 
     public interface GameMenuCallbacks {
         void showMenu(GameInputDevice devic);
@@ -3559,6 +3560,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             refreshMeter.cancel();
             refreshMeter = null;
         }
+        if (hostMetrics != null) {
+            hostMetrics.stop();
+            hostMetrics = null;
+        }
         if (connecting || connected) {
             if (connected) {
                 // Measured over the stream, for the next one to ask for a rate that allows for it
@@ -3854,6 +3859,16 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 connecting = false;
                 updatePipAutoEnter();
 
+                if (prefConfig.enablePerfOverlay && prefConfig.perfOverlayHostMetrics && httpConn != null && hostMetrics == null) {
+                    if (conn.getHostHardwareMetricsVersion() >= 1) {
+                        hostMetrics = new com.limelight.utils.HostHardwareMetrics(Game.this, httpConn);
+                        hostMetrics.start();
+                    }
+                    else {
+                        LimeLog.info("Host doesn't offer hardware metrics");
+                    }
+                }
+
                 // Hide the mouse cursor now after a short delay.
                 // Doing it before dismissing the spinner seems to be undone
                 // when the spinner gets displayed. On Android Q, even now
@@ -4121,7 +4136,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     }
 
     @Override
-    public void onPerfUpdate(final String text) {
+    public void onPerfUpdate(final String perfText) {
+        final String text = withStreamFacts(perfText);
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
@@ -4132,6 +4148,25 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 }
             }
         });
+    }
+
+    // Lines the decoder doesn't know about: the host's hardware load
+    private String withStreamFacts(String text) {
+        String separator = prefConfig.enablePerfOverlayLite ? "\t " : "\n";
+        StringBuilder sb = new StringBuilder(text);
+        com.limelight.utils.HostHardwareMetrics metrics = hostMetrics;
+        String metricsLine = metrics != null ? metrics.latestLine() : null;
+        if (metricsLine != null) {
+            appendLine(sb, separator, metricsLine);
+        }
+        return sb.toString();
+    }
+
+    private static void appendLine(StringBuilder sb, String separator, String line) {
+        if (sb.length() > 0 && sb.charAt(sb.length() - 1) != '\n') {
+            sb.append(separator);
+        }
+        sb.append(line);
     }
 
     @Override

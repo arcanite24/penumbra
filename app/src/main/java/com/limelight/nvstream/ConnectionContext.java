@@ -21,6 +21,9 @@ public class ConnectionContext {
     public String serverGfeVersion;
     public int serverCodecModeSupport;
 
+    // Vibepollo's HardwareMetricsVersion from /serverinfo (0 when not offered)
+    public int hostHardwareMetricsVersion;
+
     // This is the sessionUrl0 tag from /resume and /launch
     public String rtspSessionUrl;
     

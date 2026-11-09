@@ -136,6 +136,13 @@
     <string name="perf_overlay_capture_latency">Capture to decoded/present: %1$.1f/%2$.1f ms %3$s</string>
     <string name="perf_overlay_capture_to_decoded">Capture to decoded: %1$.1f ms %2$s</string>
     <string name="perf_overlay_lite_capture_to_present">Capture→present: %1$.1f ms %2$s</string>
+    <string name="perf_overlay_host_metrics_prefix">Host:</string>
+    <string name="perf_overlay_host_cpu">CPU %1$.0f%%</string>
+    <string name="perf_overlay_host_gpu">GPU %1$.0f%%</string>
+    <string name="perf_overlay_host_encoder">encoder %1$.0f%%</string>
+    <string name="perf_overlay_host_temperature">%1$.0f °C</string>
+    <string name="perf_overlay_host_vram">VRAM %1$.1f GB</string>
+    <string name="perf_overlay_host_metrics_none">no readings</string>
     <string name="perf_overlay_lite_capture_to_decoded">Capture→decoded: %1$.1f ms %2$s</string>
     <string name="perf_overlay_latency_synced">(clock sync)</string>
     <string name="perf_overlay_latency_estimated">(est.)</string>
@@ -468,6 +475,8 @@
     <string name="title_checkbox_onscreen_style_official">Official Virtual Gamepad Skin</string>
     <string name="summary_checkbox_onscreen_style_official">If you still like the old style of official virtual gamepad buttons, you can select this option.\nButton shapes can be square if you selected the bottom virtual button [Normal buttons are square buttons]</string>
     <string name="title_checkbox_perf_overlay_latency">Show total latency</string>
+    <string name="title_checkbox_perf_overlay_host_metrics">Show host hardware load</string>
+    <string name="summary_checkbox_perf_overlay_host_metrics">Show the host\'s CPU, GPU, encoder load, GPU temperature and VRAM. Needs a Vibepollo host with hardware metrics turned on; checked every few seconds.</string>
     <string name="summary_checkbox_perf_overlay_latency">Show the time from the host capturing a frame until it\'s decoded and until it\'s on screen. Exact with hosts that answer clock sync; otherwise estimated from half the round trip.</string>
     <string name="title_checkbox_enable_perf_overlay_lite">Enable Lite mode</string>
     <string name="summary_checkbox_enable_perf_overlay_lite">Display simplified performance information: Network Speed / Latency / Decode / Packet Loss Rate / FPS</string>
