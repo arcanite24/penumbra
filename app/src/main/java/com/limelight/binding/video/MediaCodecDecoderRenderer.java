@@ -2303,11 +2303,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         return (int)(globalVideoStats.decoderTimeMs / globalVideoStats.totalFramesReceived);
     }
 
-    /**
-     * Cumulative counters for the setup wizard's trial streams (PEN-8):
-     * {decoderTimeMs, framesReceived, framesRendered, totalFrames, framesLost, uptimeMs}.
-     * Updated about once a second when the stats window flips.
-     */
     // KEY_MAX_INPUT_SIZE we asked the decoder for, 0 when we left its default (PEN-10)
     private int requestedInputBufferSize;
 
@@ -2358,6 +2353,13 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         streamBitrateLabel = label;
     }
 
+    /**
+     * Cumulative counters for the setup wizard's trial streams (PEN-8) and automatic bitrate:
+     * {decoderTimeMs, framesReceived, framesRendered, totalFrames, framesLost, uptimeMs}.
+     * framesLost counts frame-number gaps at submit: network loss, but also frames the client's
+     * decode-unit queue flushed when the decoder fell behind. Updated about once a second when
+     * the stats window flips.
+     */
     public long[] getProbeCounters() {
         VideoStats s = globalVideoStats;
         return new long[] {s.decoderTimeMs, s.totalFramesReceived, s.totalFramesRendered,

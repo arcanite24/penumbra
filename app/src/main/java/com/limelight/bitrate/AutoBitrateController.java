@@ -32,6 +32,10 @@ public final class AutoBitrateController {
     public static final long UP_HOLD_MAX_MS = 16 * 60_000L;
     public static final long UP_PROVE_MS = 60_000L;
     public static final long SETTLE_MS = 3_000L;
+    /** Samples ignored after the stream is shown normally again (menu closed, back from PiP...). */
+    public static final long RESUME_GRACE_MS = 3_000L;
+    /** Decoded below this share of the presentable rate: the client is stalling, not the link. */
+    public static final float DEVICE_STALL_RATIO = 0.85f;
 
     public enum Health { GOOD, STRAINED, TROUBLE, DEVICE, IDLE }
 
@@ -131,12 +135,21 @@ public final class AutoBitrateController {
         }
         boolean rttRising = s.rttMs > 0 && rttFloor != Integer.MAX_VALUE
                 && s.rttMs > rttFloor + Math.max(15, rttFloor);
+        // Frames dropped on purpose because the screen refreshes slower than the stream aren't the device's fault
+        float presentable = maxPresentFps > 0 ? Math.min(s.receivedFps, maxPresentFps) : s.receivedFps;
+        boolean decoderStalled = presentable > 0 && s.decodedFps < presentable * DEVICE_STALL_RATIO;
+        // "Lost" frames are frame-number gaps at the decoder. When the decoder stalls, the client's
+        // own decode-unit queue overflows and is flushed (moonlight-common-c "Video decode unit
+        // queue overflow"), which makes gaps with no network loss at all. A real network loss
+        // lowers received and decoded fps together, so loss with the decoder falling behind and
+        // no RTT rise is the device, not the link.
+        if (decoderStalled && !rttRising) {
+            return Health.DEVICE;
+        }
         if (s.lossPct >= TROUBLE_LOSS_PCT || (s.lossPct > 0 && rttRising)) {
             return Health.TROUBLE;
         }
-        // Frames dropped on purpose because the screen refreshes slower than the stream aren't the device's fault
-        float presentable = maxPresentFps > 0 ? Math.min(s.receivedFps, maxPresentFps) : s.receivedFps;
-        if (s.lossPct == 0 && presentable > 0 && s.decodedFps < presentable * 0.85f) {
+        if (s.lossPct == 0 && decoderStalled) {
             return Health.DEVICE;
         }
         if (s.lossPct > 0 || rttRising) {
@@ -145,11 +158,52 @@ public final class AutoBitrateController {
         return Health.GOOD;
     }
 
+    /**
+     * The stream isn't shown normally (in the background, in PiP, a menu or dialog over it) or a
+     * manual change is on its way. Decoding and rendering slow down then, which would look like
+     * link trouble: samples are ignored, the trouble streak is dropped, and after it ends the next
+     * {@link #RESUME_GRACE_MS} are ignored too.
+     */
+    public void setPaused(boolean paused, long nowMs) {
+        if (paused == this.paused) return;
+        this.paused = paused;
+        dropTroubleStreak();
+        if (!paused) {
+            settleUntil = Math.max(settleUntil, nowMs + RESUME_GRACE_MS);
+        }
+        lastHealth = Health.IDLE;
+    }
+
+    public boolean isPaused() {
+        return paused;
+    }
+
+    /** Forget the trouble seconds in a row, including their place in the step-up window. */
+    private void dropTroubleStreak() {
+        for (int i = 0; i < troubleRun && !window.isEmpty() && window.peekLast() == Health.TROUBLE; i++) {
+            window.removeLast();
+        }
+        troubleRun = 0;
+        troubleCarriedSum = 0;
+        troubleCarriedCount = 0;
+    }
+
+    private boolean paused;
+
     /** Feed one second. Returns a change to apply, or null. */
     public Decision onSample(Sample s, long nowMs) {
         if (startedAt < 0) {
             startedAt = nowMs;
             settleUntil = nowMs + SETTLE_MS;
+        }
+        if (paused) {
+            lastHealth = Health.IDLE;
+            return null;
+        }
+        if (nowMs < settleUntil) {
+            // Not judged: a settling second must not move the RTT floor or show as trouble
+            lastHealth = Health.IDLE;
+            return null;
         }
         Health h = judge(s);
         lastHealth = h;

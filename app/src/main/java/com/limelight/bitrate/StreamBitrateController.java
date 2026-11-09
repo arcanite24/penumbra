@@ -97,7 +97,15 @@ public class StreamBitrateController {
         long[] counters();
         int rttMs();
         long videoBytesReceived();
+        /**
+         * The stream is in the foreground with nothing over it: no menu, dialog, PiP, background,
+         * loading or reconnect screen. Otherwise decoding slows and samples would look like trouble.
+         */
+        boolean streamUnobstructed();
     }
+
+    // A manual /bitrate request is on its way (PEN-10)
+    private boolean manualInFlight;
 
     /** Where what the controller learns is kept. */
     public interface LimitStore {
@@ -168,6 +176,21 @@ public class StreamBitrateController {
     private void autoStep() {
         long[] c = stats.counters();
         if (c == null) return;
+        boolean unobstructed = stats.streamUnobstructed();
+        boolean pause = !unobstructed || manualInFlight;
+        if (pause != auto.isPaused()) {
+            auto.setPaused(pause, android.os.SystemClock.uptimeMillis());
+            LimeLog.info(TAG + (pause
+                    ? "auto: paused (" + (manualInFlight ? "manual bitrate change" : "stream covered or not in the foreground") + ")"
+                    : "auto: resumed, ignoring the next " + AutoBitrateController.RESUME_GRACE_MS / 1000 + " s"));
+        }
+        if (pause) {
+            // Start the next sample afresh so the paused stretch isn't counted later
+            lastCounters = c;
+            lastBytes = stats.videoBytesReceived();
+            lastSampleAt = c[5];
+            return;
+        }
         if (lastCounters == null || c[5] <= 0) {
             lastCounters = c;
             lastBytes = stats.videoBytesReceived();
@@ -196,7 +219,7 @@ public class StreamBitrateController {
         final AutoBitrateController.Decision d = auto.onSample(s, now);
         if (auto.getLastHealth() == AutoBitrateController.Health.TROUBLE
                 || auto.getLastHealth() == AutoBitrateController.Health.STRAINED) {
-            LimeLog.info(String.format(Locale.US, TAG + "auto: %s, %.1f%% frames lost, rtt %d ms, %.0f/%.0f fps received/decoded, %d kbps arrived",
+            LimeLog.info(String.format(Locale.US, TAG + "auto: %s, %.1f%% frames missing (network loss or client queue drops), rtt %d ms, %.0f/%.0f fps received/decoded, %d kbps arrived",
                     auto.getLastHealth(), lossPct, s.rttMs, s.receivedFps, s.decodedFps, carried));
         }
         if (d == null) return;
@@ -257,6 +280,11 @@ public class StreamBitrateController {
             if (result != null) result.done(false, currentKbps);
             return;
         }
+        final boolean manual = "menu".equals(source);
+        if (manual) {
+            // ui thread: request() is called from the menu
+            manualInFlight = true;
+        }
         worker.execute(() -> {
             int applied = 0;
             String error = null;
@@ -275,6 +303,7 @@ public class StreamBitrateController {
             final int fApplied = applied;
             final String fError = error;
             ui.post(() -> {
+                if (manual) manualInFlight = false;
                 if (stopped) return;
                 if (fError == null) {
                     currentKbps = fApplied;

@@ -195,4 +195,61 @@ public class AutoBitrateControllerTest {
         assertNull(feed(c, LOSSY, 3)); // settling
         assertNotNull(feed(c, LOSSY, 3));
     }
+
+    @Test
+    public void pausedSamplesAreIgnoredAndTheStreakIsDropped() {
+        AutoBitrateController c = controller(40000, 40000);
+        // Two trouble seconds, then a menu opens
+        assertNull(c.onSample(LOSSY, now += 1000));
+        assertNull(c.onSample(LOSSY, now += 1000));
+        c.setPaused(true, now);
+        assertTrue(c.isPaused());
+        assertEquals(AutoBitrateController.Health.IDLE, c.getLastHealth());
+        // However bad it looks while paused, nothing happens
+        assertNull(feed(c, LOSSY, 30));
+        assertEquals(AutoBitrateController.Health.IDLE, c.getLastHealth());
+        c.setPaused(false, now);
+        // The grace period after the menu closes is ignored too
+        long graceEnd = now + AutoBitrateController.RESUME_GRACE_MS;
+        while (now + 1000 < graceEnd) {
+            assertNull(c.onSample(LOSSY, now += 1000));
+        }
+        // The streak before the pause was dropped: it takes three fresh trouble seconds
+        now = graceEnd;
+        assertNull(c.onSample(LOSSY, now += 1000));
+        assertNull(c.onSample(LOSSY, now += 1000));
+        assertNotNull(c.onSample(LOSSY, now += 1000));
+    }
+
+    @Test
+    public void pausedTroubleDoesNotBlockTheNextStepUp() {
+        AutoBitrateController c = controller(40000, 20000);
+        assertNull(feed(c, GOOD, 30));
+        assertNull(c.onSample(LOSSY, now += 1000));
+        c.setPaused(true, now);
+        c.setPaused(false, now);
+        now += AutoBitrateController.RESUME_GRACE_MS;
+        // The trouble second at the start of the pause doesn't count against the window: the
+        // window is full again after 30 more good seconds, not 60
+        AutoBitrateController.Decision d = feed(c, GOOD, 45);
+        assertNotNull(d);
+        assertTrue(d.up);
+    }
+
+    @Test
+    public void lossWhileTheDecoderStallsIsTheDevice() {
+        AutoBitrateController c = controller(150000, 150000);
+        c.setMaxPresentFps(120);
+        // Seen on device with the Quick Menu open: 9.7% frame-number gaps, 111 fps received,
+        // 74 decoded, RTT steady. The gaps were the client's decode-unit queue being flushed.
+        AutoBitrateController.Sample stall = new AutoBitrateController.Sample(123, 9.7f, 111f, 74f, 4, 4661);
+        assertEquals(AutoBitrateController.Health.DEVICE, c.judge(stall));
+        assertNull(feed(c, stall, 10));
+        // Real network loss: decoded keeps up with what arrives
+        AutoBitrateController.Sample netLoss = new AutoBitrateController.Sample(120, 9.7f, 108f, 108f, 4, 60000);
+        assertEquals(AutoBitrateController.Health.TROUBLE, c.judge(netLoss));
+        // A stall with RTT climbing is still the link
+        AutoBitrateController.Sample congested = new AutoBitrateController.Sample(120, 9.7f, 108f, 70f, 40, 60000);
+        assertEquals(AutoBitrateController.Health.TROUBLE, c.judge(congested));
+    }
 }

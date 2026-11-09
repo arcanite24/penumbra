@@ -4495,10 +4495,29 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 public long videoBytesReceived() {
                     return MoonBridge.getVideoBytesReceived();
                 }
+
+                @Override
+                public boolean streamUnobstructed() {
+                    return isStreamUnobstructed();
+                }
             }, key == null ? null : (limitKbps, upHoldMs) ->
                     com.limelight.bitrate.AutoBitrateMemory.remember(Game.this, key, limitKbps, upHoldMs));
         }
         streamBitrate.start();
+    }
+
+    /**
+     * The stream is shown normally: connected, in the foreground, not in PiP, and no menu,
+     * dialog, loading or reconnect screen over it (any of those takes the window focus).
+     */
+    private boolean isStreamUnobstructed() {
+        if (!connected || isFinishing() || spinner != null) {
+            return false;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && isInPictureInPictureMode()) {
+            return false;
+        }
+        return hasWindowFocus();
     }
 
     private void updateStreamBitrateLabel() {
