@@ -616,7 +616,12 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         // The renderer only draws into a front buffer when it places frames itself: host-timed
         // pacing puts each frame on a scan from the host's frame times, with the jitter buffer
         // absorbing network jitter, so a front buffer always uses it
-        int pacing = prefs.vulkanFrontBuffer ? VULKAN_PACING_HOST_TIMED : prefs.framePacing;
+        // absorbing network jitter, so a front buffer always uses it. Without one, the renderer's
+        // own vsync-picking modes (balanced, cap, smoothest) skipped about 1 frame in 12 at
+        // 120 fps on the Odin 2, where host-timed pacing showed 119 of 120, so they map to
+        // host-timed too; lowest latency keeps showing each frame as it arrives
+        int pacing = prefs.vulkanFrontBuffer || prefs.framePacing != PreferenceConfiguration.FRAME_PACING_MIN_LATENCY
+                ? VULKAN_PACING_HOST_TIMED : prefs.framePacing;
         VulkanRendererBridge renderer = VulkanRendererBridge.create(renderTarget, width, height, targetFps,
                 pacing, jitterBuffer, 0 /* no dithering */,
                 getPreferredColorSpace(), fullRange, tenBit,
