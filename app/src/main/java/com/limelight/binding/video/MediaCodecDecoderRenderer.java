@@ -84,6 +84,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     // Update stats using real decode time: enqueue->dequeue, instead of uptime - PTS
     private void updateDecodeLatencyStats(long presentationTimeUs) {
+        countCaptureToDecoded(presentationTimeUs);
         Long enqNs = enqueueNsByPtsUs.get(presentationTimeUs);
         if (enqNs != null) {
             enqueueNsByPtsUs.delete(presentationTimeUs);
@@ -169,6 +170,17 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private VideoStats activeWindowVideoStats;
     private VideoStats lastWindowVideoStats;
     private VideoStats globalVideoStats;
+
+    /** One sample a second of the stream's health, for spotting periodic network stalls */
+    public interface StreamSampleListener {
+        /**
+         * @param lossPercent frames lost in the last second, or negative if none were due
+         * @param rttVarianceMs round-trip time variation, or negative if unknown
+         * @param fps the stream's frame rate
+         */
+        void onStreamSample(float lossPercent, float rttVarianceMs, float fps);
+    }
+    private volatile StreamSampleListener streamSampleListener;
     private volatile long probeLastFlipUptime;
 
     private long lastTimestampUs;
@@ -208,6 +220,29 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private boolean frontBufferUnavailableReported;
     // The extended arguments of the decode unit being submitted (submitDecodeUnit() overload)
     private long duPresentationTimeUs, duEnqueueTimeUs, duReceiveTimeUs;
+
+    // Where a frame's capture latency counts from, on System.nanoTime(): the host's capture with
+    // clock sync, or else its first packet arriving less the host's processing time. For the
+    // direct (MediaCodec) renderer, by decoder timestamp, until the frame is decoded and then
+    // until it's rendered. The Vulkan renderer keeps its own (takeCaptureLatency()).
+    private static final class CaptureOrigin {
+        final long timeNs;
+        final boolean synced;
+
+        CaptureOrigin(long timeNs, boolean synced) {
+            this.timeNs = timeNs;
+            this.synced = synced;
+        }
+    }
+    private final LongSparseArray<CaptureOrigin> captureOriginByPtsUs = new LongSparseArray<>();
+    private final LongSparseArray<CaptureOrigin> renderOriginByPtsUs = new LongSparseArray<>();
+    private final long[] captureLatency = new long[6];
+    // Capture to decoded and to present as the renderer thread and the frame rendered callbacks
+    // count them (total us, frames, frames without clock sync, for each), folded into the stats
+    // window by the thread that submits frames
+    private final java.util.concurrent.atomic.AtomicLongArray pendingCaptureLatency =
+            new java.util.concurrent.atomic.AtomicLongArray(6);
+    private HandlerThread renderStatsThread;
     private int[] duMissingRanges, duRecordStarts;
     private int duPartialKind;
 
@@ -694,6 +729,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         // What the renderer presented and how long decoding took, since the last frame
         activeWindowVideoStats.totalFramesRendered += vulkan.takePresentedFrames();
+        Arrays.fill(captureLatency, 0);
+        vulkan.takeCaptureLatency(captureLatency);
+        activeWindowVideoStats.totalCaptureToDecodedUs += captureLatency[0] / 1000;
+        activeWindowVideoStats.framesWithCaptureToDecoded += (int) captureLatency[1];
+        activeWindowVideoStats.decodedWithoutNetworkTransit += (int) captureLatency[2];
+        activeWindowVideoStats.totalCaptureToPresentUs += captureLatency[3] / 1000;
+        activeWindowVideoStats.framesWithCaptureToPresent += (int) captureLatency[4];
+        activeWindowVideoStats.presentedWithoutNetworkTransit += (int) captureLatency[5];
         pyrowaveDecodeNs += vulkan.takeDecodedNs();
         long decodeMs = pyrowaveDecodeNs / 1_000_000L;
         pyrowaveDecodeNs -= decodeMs * 1_000_000L;
@@ -799,6 +842,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
 
         videoDecoder.configure(format, decoderSurface, null, 0);
+        registerFrameRenderedListener();
 
         // Penumbra (PEN-6): the surface frame rate is set once, in Game.surfaceCreated(), which
         // picks the refresh rate that suits the stream. Overriding it here with the raw stream FPS
@@ -1730,6 +1774,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         if (videoDecoder != null) {
             videoDecoder.release();
         }
+        if (renderStatsThread != null) {
+            renderStatsThread.quitSafely();
+            renderStatsThread = null;
+        }
 
         // Only once the decoder has let go of the renderer's image reader
         VulkanRendererBridge vulkan = vulkanRenderer;
@@ -1880,8 +1928,17 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             activeWindowVideoStats.totalFramesRendered += vulkanStats.takePresentedFrames();
         }
 
+        foldPendingCaptureLatency();
+
         // Flip stats windows roughly every second
         if (SystemClock.uptimeMillis() >= activeWindowVideoStats.measurementStartTimestamp + 1000) {
+            StreamSampleListener sampleListener = streamSampleListener;
+            if (sampleListener != null) {
+                float lossPercent = activeWindowVideoStats.totalFrames > 0 ?
+                        100f * activeWindowVideoStats.framesLost / activeWindowVideoStats.totalFrames : -1;
+                long sampleRtt = MoonBridge.getEstimatedRttInfo();
+                sampleListener.onStreamSample(lossPercent, sampleRtt >= 0 ? (int) sampleRtt : -1, prefs.fps);
+            }
             if (vulkanStats != null) {
                 // The display mode can change mid-stream
                 try {
@@ -1941,6 +1998,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     sb.append(context.getString(R.string.perf_overlay_lite_netdrops,(float)lastTwo.framesLost / lastTwo.totalFrames * 100));
                     sb.append("\t FPS：");
                     sb.append(context.getString(R.string.perf_overlay_lite_fps, fps.totalFps));
+                    String latencyText = captureLatencyText(lastTwo, rttInfo, true);
+                    if (latencyText != null) {
+                        sb.append("\t ").append(latencyText);
+                    }
                     if(Stereo3DRenderer.isActive) {
                         sb.append(" ");
                         sb.append(context.getString(R.string.perf_overlay_ai_fps));
@@ -2012,6 +2073,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                 (float)lastTwo.totalHostProcessingLatency / 10 / lastTwo.framesWithHostProcessingLatency)).append('\n');
                     }
                     sb.append(context.getString(R.string.perf_overlay_dectime, decodeTimeMs));
+                    String latencyText = captureLatencyText(lastTwo, rttInfo, false);
+                    if (latencyText != null) {
+                        sb.append('\n').append(latencyText);
+                    }
                 }
                 String fullLog = sb.toString();
                 if(prefs.enablePerfOverlay) {
@@ -2320,12 +2385,149 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         if (vulkanInput != null) {
             vulkanInput.noteFrameReceived(timestampUs, duReceiveTimeUs, duEnqueueTimeUs, frameHostProcessingLatency);
         }
+        noteCaptureOrigin(timestampUs, duPresentationTimeUs, duReceiveTimeUs, frameHostProcessingLatency);
 
         if (!queueNextInputBuffer(timestampUs, codecFlags)) {
             return MoonBridge.DR_NEED_IDR;
         }
 
         return MoonBridge.DR_OK;
+    }
+
+    // A frame the host gave no processing time for repeats an earlier one, so it has no capture of
+    // its own. From Moonlight X (85d98daf1).
+    private void noteCaptureOrigin(long ptsUs, long hostPtsUs, long receiveTimeUs, char hostProcessingLatency) {
+        if (hostProcessingLatency == 0 || !prefs.enablePerfOverlay) {
+            return;
+        }
+
+        // moonlight-common-c's clock to System.nanoTime(), which MediaCodec's render times are on
+        long commonToLocalNs = System.nanoTime() - MoonBridge.getMicroseconds() * 1000;
+        CaptureOrigin origin;
+        long captureUs = MoonBridge.getHostTimeOnLocalClock(hostPtsUs);
+        if (captureUs >= 0) {
+            origin = new CaptureOrigin(captureUs * 1000 + commonToLocalNs, true);
+        }
+        else if (receiveTimeUs != 0) {
+            // Without clock sync, nothing measures the network transit per frame, so it's left
+            // out. The host's part is on its clock and the rest on ours, so they add without the
+            // clocks needing to agree.
+            origin = new CaptureOrigin((receiveTimeUs - hostProcessingLatency * 100L) * 1000 + commonToLocalNs, false);
+        }
+        else {
+            return;
+        }
+
+        synchronized (captureOriginByPtsUs) {
+            captureOriginByPtsUs.put(ptsUs, origin);
+            while (captureOriginByPtsUs.size() > 64) {
+                captureOriginByPtsUs.removeAt(0);
+            }
+        }
+    }
+
+    private void countCaptureToDecoded(long ptsUs) {
+        CaptureOrigin origin;
+        synchronized (captureOriginByPtsUs) {
+            int index = captureOriginByPtsUs.indexOfKey(ptsUs);
+            if (index < 0) {
+                return;
+            }
+            origin = captureOriginByPtsUs.valueAt(index);
+
+            // Frames are decoded in order, so any still waiting before this one never will be
+            for (int i = index; i >= 0; i--) {
+                captureOriginByPtsUs.removeAt(i);
+            }
+        }
+
+        if (countLatency(0, System.nanoTime() - origin.timeNs, origin.synced) &&
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            synchronized (renderOriginByPtsUs) {
+                renderOriginByPtsUs.put(ptsUs, origin);
+                while (renderOriginByPtsUs.size() > 64) {
+                    renderOriginByPtsUs.removeAt(0);
+                }
+            }
+        }
+    }
+
+    // Capture to present for the direct renderer, as MediaCodec reports frames reaching the
+    // display. Some devices report late or in batches, and frames dropped before display never.
+    private void registerFrameRenderedListener() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+            return;
+        }
+        if (renderStatsThread == null) {
+            renderStatsThread = new HandlerThread("Video - Render stats", Process.THREAD_PRIORITY_DISPLAY);
+            renderStatsThread.start();
+        }
+        videoDecoder.setOnFrameRenderedListener((codec, presentationTimeUs, renderTimeNanos) -> {
+            CaptureOrigin origin;
+            synchronized (renderOriginByPtsUs) {
+                int index = renderOriginByPtsUs.indexOfKey(presentationTimeUs);
+                if (index < 0) {
+                    return;
+                }
+                origin = renderOriginByPtsUs.valueAt(index);
+                for (int i = index; i >= 0; i--) {
+                    renderOriginByPtsUs.removeAt(i);
+                }
+            }
+            countLatency(3, renderTimeNanos - origin.timeNs, origin.synced);
+        }, new Handler(renderStatsThread.getLooper()));
+    }
+
+    // Counts a capture latency into pendingCaptureLatency at base (0 decoded, 3 presented).
+    // Outside a second, the clock sync or the frame's timing must be wrong.
+    private boolean countLatency(int base, long latencyNs, boolean synced) {
+        if (latencyNs < 0 || latencyNs >= 1_000_000_000L) {
+            return false;
+        }
+        pendingCaptureLatency.addAndGet(base, latencyNs / 1000);
+        pendingCaptureLatency.incrementAndGet(base + 1);
+        if (!synced) {
+            pendingCaptureLatency.incrementAndGet(base + 2);
+        }
+        return true;
+    }
+
+    private void foldPendingCaptureLatency() {
+        activeWindowVideoStats.totalCaptureToDecodedUs += pendingCaptureLatency.getAndSet(0, 0);
+        activeWindowVideoStats.framesWithCaptureToDecoded += (int) pendingCaptureLatency.getAndSet(1, 0);
+        activeWindowVideoStats.decodedWithoutNetworkTransit += (int) pendingCaptureLatency.getAndSet(2, 0);
+        activeWindowVideoStats.totalCaptureToPresentUs += pendingCaptureLatency.getAndSet(3, 0);
+        activeWindowVideoStats.framesWithCaptureToPresent += (int) pendingCaptureLatency.getAndSet(4, 0);
+        activeWindowVideoStats.presentedWithoutNetworkTransit += (int) pendingCaptureLatency.getAndSet(5, 0);
+    }
+
+    // Average capture latency in milliseconds. Frames measured without clock sync leave out the
+    // network transit, which can only be estimated for them as half the round trip: that assumes
+    // the path is symmetric, at enet's 1 ms resolution.
+    private static float averageCaptureLatencyMs(long totalUs, int frames, int withoutNetworkTransit, long rttInfo) {
+        float networkMs = rttInfo >= 0 ? (rttInfo >> 32) / 2f : 0;
+        return (totalUs / 1000f + networkMs * withoutNetworkTransit) / frames;
+    }
+
+    // The overlay's capture latency text: capture to decoded/present where both are measured, or
+    // else capture to decoded, marked as estimated when most frames had no clock sync. Null when
+    // nothing was measured or it's turned off.
+    private String captureLatencyText(VideoStats stats, long rttInfo, boolean lite) {
+        if (!prefs.perfOverlayLatency || stats.framesWithCaptureToDecoded == 0) {
+            return null;
+        }
+        float decodedMs = averageCaptureLatencyMs(stats.totalCaptureToDecodedUs, stats.framesWithCaptureToDecoded,
+                stats.decodedWithoutNetworkTransit, rttInfo);
+        boolean estimated = stats.decodedWithoutNetworkTransit * 2 > stats.framesWithCaptureToDecoded;
+        String source = context.getString(estimated ? R.string.perf_overlay_latency_estimated : R.string.perf_overlay_latency_synced);
+        if (stats.framesWithCaptureToPresent > 0) {
+            float presentMs = averageCaptureLatencyMs(stats.totalCaptureToPresentUs, stats.framesWithCaptureToPresent,
+                    stats.presentedWithoutNetworkTransit, rttInfo);
+            return lite ? context.getString(R.string.perf_overlay_lite_capture_to_present, presentMs, source) :
+                    context.getString(R.string.perf_overlay_capture_latency, decodedMs, presentMs, source);
+        }
+        return lite ? context.getString(R.string.perf_overlay_lite_capture_to_decoded, decodedMs, source) :
+                context.getString(R.string.perf_overlay_capture_to_decoded, decodedMs, source);
     }
 
     private boolean replaySps() {
@@ -2383,6 +2585,15 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
 
         return capabilities;
+    }
+
+    public void setStreamSampleListener(StreamSampleListener listener) {
+        streamSampleListener = listener;
+    }
+
+    /** Whether any video frame arrived on this stream */
+    public boolean hasReceivedFrames() {
+        return globalVideoStats.totalFramesReceived > 0 || activeWindowVideoStats.totalFramesReceived > 0;
     }
 
     public int getAverageEndToEndLatency() {
