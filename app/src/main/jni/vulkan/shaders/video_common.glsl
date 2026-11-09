@@ -6,8 +6,10 @@ layout(push_constant) uniform PushConstants {
     vec4 uvRect;
     vec4 uvClamp;
     vec4 params;   // x = dither amplitude, y = frame counter, z = output mode, w = content peak nits
-    vec4 params2;  // x = SDR reference white nits, y = quarter turns clockwise to pre-rotate by
+    vec4 params2;  // x = SDR reference white nits, y = quarter turns clockwise to pre-rotate by,
+                   // z = upscaler sharpness (RCAS strength or SGSR edge sharpness)
     vec4 ycbcr;    // Planar video: x = Kr, y = Kb, z = chroma midpoint, w = chroma U offset
+    vec4 scale;    // Upscaling: xy = the crop's size in texels, zw = the output's size in pixels
 } pc;
 
 const float OUTPUT_PASSTHROUGH = 0.0;

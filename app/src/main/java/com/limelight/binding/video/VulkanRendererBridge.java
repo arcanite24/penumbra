@@ -75,21 +75,25 @@ public class VulkanRendererBridge {
      *                       {@code adb shell setprop debug.moonlight.pacer_trace 1}, or null
      * @param frontBuffer draw into a front buffer the display reads directly, timed to each scan,
      *                    where the device has one
-     * @param pyrowaveGpuBoost for PyroWave, keep the GPU busy between decodes so its clock stays up
+     * @param gpuBoost keep the GPU busy between frames so its clock stays up
+     * @param upscaler one of PreferenceConfiguration.UPSCALER_*: how to scale the stream up to an
+     *                 output surface larger than it (Game leaves the surface at the view's size
+     *                 when one is chosen)
      */
     public static VulkanRendererBridge create(Surface output, int streamWidth, int streamHeight, int streamFps,
                                               int framePacing, int jitterBuffer, int ditherMode, int colorspace,
                                               boolean fullRange, boolean tenBit, boolean pyrowave,
                                               boolean pyrowaveCenterChroma, int pyrowaveLateFrames,
                                               float displayRefreshHz, String codec, String decoderName,
-                                              String traceDirectory, boolean frontBuffer, boolean pyrowaveGpuBoost) {
+                                              String traceDirectory, boolean frontBuffer, boolean gpuBoost,
+                                              int upscaler) {
         if (!isSupported() || (pyrowave && !isPyrowaveSupported())) {
             return null;
         }
 
         long handle = nativeCreate(output, streamWidth, streamHeight, streamFps, framePacing, jitterBuffer, ditherMode,
                 colorspace, fullRange, tenBit, pyrowave, pyrowaveCenterChroma, pyrowaveLateFrames, displayRefreshHz,
-                codec, decoderName, traceDirectory, frontBuffer, pyrowaveGpuBoost);
+                codec, decoderName, traceDirectory, frontBuffer, gpuBoost, upscaler);
         if (handle == 0) {
             return null;
         }
@@ -248,7 +252,8 @@ public class VulkanRendererBridge {
                                             boolean fullRange, boolean tenBit, boolean pyrowave,
                                             boolean pyrowaveCenterChroma, int pyrowaveLateFrames,
                                             float displayRefreshHz, String codec, String decoderName,
-                                            String traceDirectory, boolean frontBuffer, boolean pyrowaveGpuBoost);
+                                            String traceDirectory, boolean frontBuffer, boolean gpuBoost,
+                                            int upscaler);
     private static native boolean nativeSubmitPyrowaveFrame(long handle, byte[] frame, int length, long hostPtsUs,
                                                             long lastPacketUs, int[] missingRanges,
                                                             int[] recordStarts, int partialKind);

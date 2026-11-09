@@ -40,6 +40,7 @@ namespace {
         float params[4];
         float params2[4];
         float ycbcr[4];
+        float scale[4];  // Upscaling: the crop's size in texels, then the output's in pixels
     };
 
     constexpr float kOutputPassthrough = 0.0f;
@@ -561,6 +562,21 @@ VulkanRenderer::VulkanRenderer(const NdkApi* ndk, const RendererConfig& config)
     if (frontBufferRequested_) {
         ALOGI("Front buffer asked for%s", frontBufferAligned_ ? ", aligned to the scan" : "");
     }
+    // Upscaling (PEN-10). RCAS at 0.2 stops, FSR's default (2^-0.2 as a linear strength), and SGSR
+    // at Qualcomm's default edge sharpness.
+    upscaler_ = config.upscaler == 1 ? Upscaler::Fsr : config.upscaler == 2 ? Upscaler::Sgsr : Upscaler::Off;
+    upscaleSharpness_ = upscaler_ == Upscaler::Fsr ? 0.87f : 2.0f;
+    if (upscaler_ != Upscaler::Off && __system_property_get("debug.penumbra.upscale_sharpness", value) > 0) {
+        const float sharpness = static_cast<float>(atof(value));
+        upscaleSharpness_ = upscaler_ == Upscaler::Fsr ? std::clamp(sharpness, 0.0f, 1.0f) : std::clamp(sharpness, 1.0f, 2.0f);
+        ALOGI("Upscaler sharpness %.2f", upscaleSharpness_);
+    }
+    if (upscaler_ != Upscaler::Off) {
+        ALOGI("Upscaling with %s asked for", upscaler_ == Upscaler::Fsr ? "FSR 1 (EASU + RCAS)" : "SGSR 1");
+    }
+    if (!config.pyrowave) {
+        return;
+    }
     ALOGI("PyroWave frames that lost packets shown with at least %d%% of their blocks", lostFrameMinPercent_);
     ALOGI("Late PyroWave frames cut short: %s", partialEnabled_ ? "on" : "off");
     if (partialEnabled_) {
@@ -608,14 +624,16 @@ bool VulkanRenderer::init(ANativeWindow* output) {
         return false;
     }
 
-    // Work for the GPU between PyroWave decodes, so it keeps its clock up (GpuKeepBusy), with the
-    // PyroWave GPU boost setting. To switch it on or off whatever the setting says:
+    // Work for the GPU between frames, so it keeps its clock up (GpuKeepBusy), with the GPU boost
+    // setting. Measured for PyroWave decodes; Penumbra (PEN-10) also offers it for MediaCodec
+    // frames, whose draws (with upscaling, several passes) then don't wait for the GPU to clock up.
+    // To switch it on or off whatever the setting says:
     // adb shell setprop debug.moonlight.gpu_keep_busy 1 (or 0). Each piece of it takes about
     // adb shell setprop debug.moonlight.gpu_keep_busy_chunk_us 500, with
     // adb shell setprop debug.moonlight.gpu_keep_busy_groups 4 workgroups.
-    if (config_.pyrowave) {
+    {
         char value[PROP_VALUE_MAX] = {};
-        bool keepBusy = config_.pyrowaveGpuBoost;
+        bool keepBusy = config_.gpuBoost;
         if (__system_property_get("debug.moonlight.gpu_keep_busy", value) > 0) {
             keepBusy = atoi(value) != 0;
             ALOGI("GPU keep-busy %s was asked for", keepBusy ? "on" : "off");
@@ -664,11 +682,12 @@ bool VulkanRenderer::init(ANativeWindow* output) {
     char configuration[512];
     snprintf(configuration, sizeof(configuration),
              "mode=%d,jitterBuffer=%d,presentAhead=%d,streamFps=%d,width=%d,height=%d,periodNs=%lld,refreshHz=%.3f,tenBit=%d,dither=%d,"
-             "perfHintUs=%lld,gpuPriority=%s,gpuKeepBusy=%u,keepAliveMs=%lld,codec=%s,decoder=%s",
+             "perfHintUs=%lld,gpuPriority=%s,gpuKeepBusy=%u,keepAliveMs=%lld,codec=%s,decoder=%s,upscaler=%d",
              config_.framePacing, config_.jitterBuffer, presentAhead_ ? 1 : 0, config_.streamFps, config_.streamWidth, config_.streamHeight,
              static_cast<long long>(pacer_.vsyncPeriodNs()), config_.displayRefreshHz, config_.tenBit ? 1 : 0,
              config_.ditherMode, static_cast<long long>(perfHintTargetNs / 1000), highPriorityQueue_ ? "high" : "default",
-             keepBusyGroups_, static_cast<long long>(keepAliveNs_ / 1'000'000), config_.codec.c_str(), config_.decoderName.c_str());
+             keepBusyGroups_, static_cast<long long>(keepAliveNs_ / 1'000'000), config_.codec.c_str(), config_.decoderName.c_str(),
+             static_cast<int>(upscaler_));
     trace_.start(config_.traceDirectory, configuration);
     traceRecording_ = trace_.recording();
 
@@ -941,6 +960,9 @@ bool VulkanRenderer::createShaderModules() {
             return false;
         }
     }
+    if (upscaler_ != Upscaler::Off && !createUpscaleShaders()) {
+        disableUpscaling("its shaders couldn't be loaded");
+    }
     return true;
 }
 
@@ -1111,9 +1133,20 @@ VulkanRenderer::~VulkanRenderer() {
             decodeVk_.vkDestroyDevice(decodeDevice_, nullptr);
             decodeDevice_ = VK_NULL_HANDLE;
         }
+        destroyConversion();
+        destroyUpscalePipelines();
+        destroyUpscaleTarget();
+        if (rcasPipelineLayout_) vk_.vkDestroyPipelineLayout(device_, rcasPipelineLayout_, nullptr);
+        if (rcasPool_) vk_.vkDestroyDescriptorPool(device_, rcasPool_, nullptr);
+        if (rcasSetLayout_) vk_.vkDestroyDescriptorSetLayout(device_, rcasSetLayout_, nullptr);
+        if (upscaleSampler_) vk_.vkDestroySampler(device_, upscaleSampler_, nullptr);
+        if (upscaleRenderPass_) vk_.vkDestroyRenderPass(device_, upscaleRenderPass_, nullptr);
+        for (VkShaderModule module : {easuFragShader_, easuPlanarFragShader_, rcasFragShader_, sgsrFragShader_,
+                                      sgsrPlanarFragShader_}) {
+            if (module) vk_.vkDestroyShaderModule(device_, module, nullptr);
+        }
         if (planarPipelineLayout_) vk_.vkDestroyPipelineLayout(device_, planarPipelineLayout_, nullptr);
         if (planarFragShader_) vk_.vkDestroyShaderModule(device_, planarFragShader_, nullptr);
-        destroyConversion();
         for (int i = 0; i < kFramesInFlight; i++) {
             if (fences_[i]) vk_.vkDestroyFence(device_, fences_[i], nullptr);
             if (imageAcquired_[i]) vk_.vkDestroySemaphore(device_, imageAcquired_[i], nullptr);
@@ -1164,6 +1197,7 @@ void VulkanRenderer::stop() {
             vk_.vkDestroyRenderPass(device_, renderPass_, nullptr);
             renderPass_ = VK_NULL_HANDLE;
         }
+        destroyUpscaleTarget();
     }
     if (surface_) {
         vk_.vkDestroySurfaceKHR(instance_, surface_, nullptr);
@@ -1241,6 +1275,9 @@ std::string VulkanRenderer::rendererText() {
     std::string text = "Vulkan " + outputDescription_;
     if (pyrowave_) {
         text += pyrowave_->fragmentPath() ? ", fragment path" : ", compute path";
+    }
+    if (!upscaleDescription_.empty()) {
+        text += ", " + upscaleDescription_;
     }
     return text;
 }
@@ -1991,16 +2028,29 @@ bool VulkanRenderer::renderFrame(const FramePtr& frame, uint64_t presentId, int6
     // A PyroWave frame's planes, or MediaCodec's buffer imported into Vulkan
     const bool planar = frame->planes != nullptr;
     ImportedBuffer* imported = nullptr;
-    if (planar) {
-        if (!ensurePlanarPipeline()) {
+    if (!planar) {
+        imported = importBuffer(frame->buffer);
+        if (!imported) {
             return false;
         }
     }
-    else {
-        imported = importBuffer(frame->buffer);
-        if (!imported || !ensurePipeline()) {
+    // The pipelines for this frame, again after a new swapchain (which can bring a new render
+    // pass, and settles whether to upscale). An upscaler that can't be set up is given up on, and
+    // the frame drawn as without one.
+    bool upscale = false;
+    const auto preparePipelines = [&]() {
+        if (!(planar ? ensurePlanarPipeline() : ensurePipeline())) {
             return false;
         }
+        upscale = upscaleActive_;
+        if (upscale && !ensureUpscalePipelines(planar)) {
+            disableUpscaling("its pipelines couldn't be made");
+            upscale = false;
+        }
+        return true;
+    };
+    if (!preparePipelines()) {
+        return false;
     }
 
     const int slot = static_cast<int>(frameCounter_ % kFramesInFlight);
@@ -2062,7 +2112,7 @@ bool VulkanRenderer::renderFrame(const FramePtr& frame, uint64_t presentId, int6
                                        VK_NULL_HANDLE, &imageIndex);
     if (result == VK_ERROR_OUT_OF_DATE_KHR) {
         swapchainDirty_ = true;
-        if (!ensureSwapchain() || !ensurePipeline()) {
+        if (!ensureSwapchain() || !preparePipelines()) {
             return false;
         }
         result = vk_.vkAcquireNextImageKHR(device_, swapchain_, kAcquireTimeoutNs, imageAcquired_[slot],
@@ -2128,6 +2178,15 @@ bool VulkanRenderer::renderFrame(const FramePtr& frame, uint64_t presentId, int6
         // This fork's Sunshine sites chroma with the left luma sample of each pair (MPEG-2
         // style); the nonary host sites it at the center of each 2x2 quad
         pc.ycbcr[3] = config_.pyrowaveCenterChroma ? 0.0f : 0.5f / bufferWidth;
+    }
+    const bool fsr = upscale && upscaler_ == Upscaler::Fsr;
+    const bool sgsr = upscale && upscaler_ == Upscaler::Sgsr;
+    if (upscale) {
+        pc.scale[0] = static_cast<float>(crop.right - crop.left);
+        pc.scale[1] = static_cast<float>(crop.bottom - crop.top);
+        pc.scale[2] = static_cast<float>(outputExtent_.width);
+        pc.scale[3] = static_cast<float>(outputExtent_.height);
+        pc.params2[2] = upscaleSharpness_;
     }
 
     VkCommandBuffer cmd = commandBuffers_[slot];
@@ -2195,6 +2254,33 @@ bool VulkanRenderer::renderFrame(const FramePtr& frame, uint64_t presentId, int6
         vk_.vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, timestampPool_, kTimestampsPerFrame * slot + 1);
     }
 
+    const VkPipelineLayout layout = planar ? planarPipelineLayout_ : pipelineLayout_;
+    const VkDescriptorSet descriptorSet = planar ? frame->planes->descriptorSet : imported->descriptorSet;
+
+    // FSR: EASU first, from the video into the intermediate image at the output's size, drawn
+    // unrotated. The render pass's dependencies order it after the last frame's RCAS and before
+    // this one's. It counts towards an aligned front buffer's lead like the rest of the draw.
+    if (fsr) {
+        VkRenderPassBeginInfo easuBegin {VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+        easuBegin.renderPass = upscaleRenderPass_;
+        easuBegin.framebuffer = upscaleFramebuffer_;
+        easuBegin.renderArea = {{0, 0}, outputExtent_};
+        vk_.vkCmdBeginRenderPass(cmd, &easuBegin, VK_SUBPASS_CONTENTS_INLINE);
+        VkViewport easuViewport {0.0f, 0.0f, static_cast<float>(outputExtent_.width),
+                                 static_cast<float>(outputExtent_.height), 0.0f, 1.0f};
+        VkRect2D easuScissor {{0, 0}, outputExtent_};
+        vk_.vkCmdSetViewport(cmd, 0, 1, &easuViewport);
+        vk_.vkCmdSetScissor(cmd, 0, 1, &easuScissor);
+        PushConstants easuPc = pc;
+        easuPc.params2[1] = 0.0f;
+        vk_.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, planar ? easuPlanarPipeline_ : easuPipeline_);
+        vk_.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &descriptorSet, 0, nullptr);
+        vk_.vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                               0, sizeof(easuPc), &easuPc);
+        vk_.vkCmdDraw(cmd, 3, 1, 0, 0);
+        vk_.vkCmdEndRenderPass(cmd);
+    }
+
     VkRenderPassBeginInfo rpBegin {VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
     rpBegin.renderPass = renderPass_;
     rpBegin.framebuffer = framebuffers_[imageIndex];
@@ -2205,12 +2291,27 @@ bool VulkanRenderer::renderFrame(const FramePtr& frame, uint64_t presentId, int6
     VkRect2D scissor {{0, 0}, extent_};
     vk_.vkCmdSetViewport(cmd, 0, 1, &viewport);
     vk_.vkCmdSetScissor(cmd, 0, 1, &scissor);
-    const VkPipelineLayout layout = planar ? planarPipelineLayout_ : pipelineLayout_;
-    const VkDescriptorSet descriptorSet = planar ? frame->planes->descriptorSet : imported->descriptorSet;
-    vk_.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, planar ? planarPipeline_ : pipeline_);
-    vk_.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &descriptorSet, 0, nullptr);
-    vk_.vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                           0, sizeof(pc), &pc);
+    if (fsr) {
+        // RCAS, from the intermediate image onto the swapchain, which it covers whole
+        PushConstants rcasPc = pc;
+        rcasPc.uvRect[0] = 0.0f;
+        rcasPc.uvRect[1] = 0.0f;
+        rcasPc.uvRect[2] = 1.0f;
+        rcasPc.uvRect[3] = 1.0f;
+        vk_.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, rcasPipeline_);
+        vk_.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, rcasPipelineLayout_, 0, 1, &rcasSet_, 0,
+                                    nullptr);
+        vk_.vkCmdPushConstants(cmd, rcasPipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                               0, sizeof(rcasPc), &rcasPc);
+    }
+    else {
+        const VkPipeline pipeline = sgsr ? (planar ? sgsrPlanarPipeline_ : sgsrPipeline_)
+                                         : (planar ? planarPipeline_ : pipeline_);
+        vk_.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+        vk_.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &descriptorSet, 0, nullptr);
+        vk_.vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                               0, sizeof(pc), &pc);
+    }
     vk_.vkCmdDraw(cmd, 3, 1, 0, 0);
     vk_.vkCmdEndRenderPass(cmd);
     if (timed) {
@@ -2574,6 +2675,7 @@ bool VulkanRenderer::createSwapchain() {
         return false;
     }
     const VkSurfaceTransformFlagBitsKHR transform = choosePreTransform(caps);
+    const VkExtent2D unrotatedExtent = extent;
     extent = preRotatedExtent(extent, transform);
 
     uint32_t formatCount = 0;
@@ -2827,6 +2929,41 @@ bool VulkanRenderer::createSwapchain() {
         outputDescription_ = description;
     }
 
+    // Upscaling (PEN-10): only to a surface larger than the stream, which Game leaves at the view's
+    // size rather than the stream's when an upscaler is chosen. Otherwise the picture is drawn at
+    // the surface's size as before.
+    upscaleActive_ = false;
+    if (upscaler_ != Upscaler::Off && !upscaleFailed_) {
+        const uint32_t streamWidth = static_cast<uint32_t>(std::max(config_.streamWidth, 1));
+        const uint32_t streamHeight = static_cast<uint32_t>(std::max(config_.streamHeight, 1));
+        const bool larger = unrotatedExtent.width >= streamWidth && unrotatedExtent.height >= streamHeight &&
+                (unrotatedExtent.width > streamWidth || unrotatedExtent.height > streamHeight);
+        const char* name = upscaler_ == Upscaler::Fsr ? "FSR" : "SGSR";
+        if (!larger) {
+            ALOGI("Not upscaling: the surface (%ux%u) isn't larger than the stream (%ux%u)", unrotatedExtent.width,
+                  unrotatedExtent.height, streamWidth, streamHeight);
+        }
+        else if (upscaler_ == Upscaler::Fsr && !createUpscaleTarget(unrotatedExtent)) {
+            disableUpscaling("FSR's intermediate image couldn't be made");
+        }
+        else {
+            upscaleActive_ = true;
+            outputExtent_ = unrotatedExtent;
+            ALOGI("Upscaling %ux%u to %ux%u with %s%s, sharpness %.2f", streamWidth, streamHeight, unrotatedExtent.width,
+                  unrotatedExtent.height, name, outputPq_ ? " (on the HDR10 signal)" : "", upscaleSharpness_);
+        }
+        std::lock_guard<std::mutex> lock(mutex_);
+        char description[96] = {};
+        if (upscaleActive_) {
+            snprintf(description, sizeof(description), "%s %ux%u to %ux%u", name, streamWidth, streamHeight,
+                     unrotatedExtent.width, unrotatedExtent.height);
+        }
+        upscaleDescription_ = description;
+    }
+    if (!upscaleActive_) {
+        destroyUpscaleTarget();
+    }
+
     ALOGI("Swapchain %ux%u, format %d, color space %d, %u images, %s, pre-rotated %d degrees", extent.width,
           extent.height, chosen.format, chosen.colorSpace, count,
           shared ? "front buffer" : presentMode == VK_PRESENT_MODE_MAILBOX_KHR ? "mailbox" : "FIFO",
@@ -2970,6 +3107,8 @@ void VulkanRenderer::destroyConversion() {
     }
     imports_.clear();
 
+    // The upscaling pipelines that read MediaCodec's buffers are in the layout going away
+    destroyUpscalePipelines();
     if (pipeline_) vk_.vkDestroyPipeline(device_, pipeline_, nullptr);
     if (pipelineLayout_) vk_.vkDestroyPipelineLayout(device_, pipelineLayout_, nullptr);
     if (descriptorPool_) vk_.vkDestroyDescriptorPool(device_, descriptorPool_, nullptr);
@@ -3000,6 +3139,7 @@ bool VulkanRenderer::ensurePlanarPipeline() {
 }
 
 void VulkanRenderer::destroyPipelines() {
+    destroyUpscalePipelines();
     if (pipeline_) {
         vk_.vkDestroyPipeline(device_, pipeline_, nullptr);
         pipeline_ = VK_NULL_HANDLE;
@@ -3010,8 +3150,12 @@ void VulkanRenderer::destroyPipelines() {
     }
 }
 
-bool VulkanRenderer::createPipeline(VkPipelineLayout layout, VkShaderModule fragShader, VkPipeline* pipeline) {
-    if (!renderPass_ || !layout) {
+bool VulkanRenderer::createPipeline(VkPipelineLayout layout, VkShaderModule fragShader, VkPipeline* pipeline,
+                                    VkRenderPass renderPass) {
+    if (!renderPass) {
+        renderPass = renderPass_;
+    }
+    if (!renderPass || !layout || !fragShader) {
         return false;
     }
 
@@ -3065,7 +3209,7 @@ bool VulkanRenderer::createPipeline(VkPipelineLayout layout, VkShaderModule frag
     info.pColorBlendState = &blend;
     info.pDynamicState = &dynamic;
     info.layout = layout;
-    info.renderPass = renderPass_;
+    info.renderPass = renderPass;
     info.subpass = 0;
 
     VkResult result = vk_.vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &info, nullptr, pipeline);
@@ -3074,6 +3218,290 @@ bool VulkanRenderer::createPipeline(VkPipelineLayout layout, VkShaderModule frag
         *pipeline = VK_NULL_HANDLE;
         return false;
     }
+    return true;
+}
+
+bool VulkanRenderer::createUpscaleShaders() {
+    auto create = [this](const uint32_t* code, size_t size, VkShaderModule* module) {
+        VkShaderModuleCreateInfo info {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+        info.codeSize = size;
+        info.pCode = code;
+        return vk_.vkCreateShaderModule(device_, &info, nullptr, module) == VK_SUCCESS;
+    };
+    if (upscaler_ == Upscaler::Fsr) {
+        return (config_.pyrowave ? create(kEasuPlanarFragSpv, sizeof(kEasuPlanarFragSpv), &easuPlanarFragShader_)
+                                 : create(kEasuFragSpv, sizeof(kEasuFragSpv), &easuFragShader_)) &&
+               create(kRcasFragSpv, sizeof(kRcasFragSpv), &rcasFragShader_);
+    }
+    if (upscaler_ == Upscaler::Sgsr) {
+        return config_.pyrowave ? create(kSgsrPlanarFragSpv, sizeof(kSgsrPlanarFragSpv), &sgsrPlanarFragShader_)
+                                : create(kSgsrFragSpv, sizeof(kSgsrFragSpv), &sgsrFragShader_);
+    }
+    return true;
+}
+
+void VulkanRenderer::disableUpscaling(const char* why) {
+    if (!upscaleFailed_) {
+        ALOGW("Upscaling off for the rest of the stream: %s", why);
+    }
+    upscaleFailed_ = true;
+    upscaleActive_ = false;
+    std::lock_guard<std::mutex> lock(mutex_);
+    upscaleDescription_.clear();
+}
+
+bool VulkanRenderer::ensureUpscalePipelines(bool planar) {
+    if (upscaler_ == Upscaler::Fsr) {
+        if (!upscaleRenderPass_ || !rcasPipelineLayout_) {
+            return false;
+        }
+        VkPipeline* easu = planar ? &easuPlanarPipeline_ : &easuPipeline_;
+        if (!*easu && !createPipeline(planar ? planarPipelineLayout_ : pipelineLayout_,
+                                      planar ? easuPlanarFragShader_ : easuFragShader_, easu, upscaleRenderPass_)) {
+            return false;
+        }
+        return rcasPipeline_ || createPipeline(rcasPipelineLayout_, rcasFragShader_, &rcasPipeline_);
+    }
+    if (upscaler_ == Upscaler::Sgsr) {
+        VkPipeline* sgsr = planar ? &sgsrPlanarPipeline_ : &sgsrPipeline_;
+        return *sgsr || createPipeline(planar ? planarPipelineLayout_ : pipelineLayout_,
+                                       planar ? sgsrPlanarFragShader_ : sgsrFragShader_, sgsr);
+    }
+    return false;
+}
+
+void VulkanRenderer::destroyUpscalePipelines() {
+    if (!device_) {
+        return;
+    }
+    for (VkPipeline* pipeline : {&easuPipeline_, &sgsrPipeline_, &easuPlanarPipeline_, &sgsrPlanarPipeline_, &rcasPipeline_}) {
+        if (*pipeline) {
+            vk_.vkDestroyPipeline(device_, *pipeline, nullptr);
+            *pipeline = VK_NULL_HANDLE;
+        }
+    }
+}
+
+void VulkanRenderer::destroyUpscaleTarget() {
+    if (!device_) {
+        return;
+    }
+    if (upscaleFramebuffer_) vk_.vkDestroyFramebuffer(device_, upscaleFramebuffer_, nullptr);
+    if (upscaleView_) vk_.vkDestroyImageView(device_, upscaleView_, nullptr);
+    if (upscaleImage_) vk_.vkDestroyImage(device_, upscaleImage_, nullptr);
+    if (upscaleMemory_) vk_.vkFreeMemory(device_, upscaleMemory_, nullptr);
+    upscaleFramebuffer_ = VK_NULL_HANDLE;
+    upscaleView_ = VK_NULL_HANDLE;
+    upscaleImage_ = VK_NULL_HANDLE;
+    upscaleMemory_ = VK_NULL_HANDLE;
+    upscaleTargetExtent_ = {};
+}
+
+bool VulkanRenderer::createUpscaleTarget(VkExtent2D extent) {
+    if (upscaleImage_ && upscaleTargetExtent_.width == extent.width && upscaleTargetExtent_.height == extent.height) {
+        return true;
+    }
+    // Callers have waited for the GPU (createSwapchain())
+    destroyUpscaleTarget();
+
+    // EASU's output keeps the video's encoding (PQ for HDR) until RCAS converts it, so it needs
+    // at least 10 bits. Every format here is one Vulkan requires drivers to render to and sample.
+    if (upscaleFormat_ == VK_FORMAT_UNDEFINED) {
+        for (VkFormat format : {VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R8G8B8A8_UNORM}) {
+            VkFormatProperties props {};
+            vk_.vkGetPhysicalDeviceFormatProperties(physicalDevice_, format, &props);
+            const VkFormatFeatureFlags needed = VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
+            if ((props.optimalTilingFeatures & needed) == needed) {
+                upscaleFormat_ = format;
+                break;
+            }
+        }
+        if (upscaleFormat_ == VK_FORMAT_UNDEFINED) {
+            ALOGE("No format to upscale into");
+            return false;
+        }
+    }
+
+    if (!upscaleRenderPass_) {
+        VkAttachmentDescription color {};
+        color.format = upscaleFormat_;
+        color.samples = VK_SAMPLE_COUNT_1_BIT;
+        color.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;  // Every pixel is drawn
+        color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        color.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        color.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        color.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        color.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        VkAttachmentReference ref {0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+        VkSubpassDescription subpass {};
+        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        subpass.colorAttachmentCount = 1;
+        subpass.pColorAttachments = &ref;
+
+        // One image serves both frames in flight: EASU waits for the last frame's RCAS to be done
+        // reading it, and RCAS for EASU to be done writing it
+        VkSubpassDependency dependencies[2] {};
+        dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+        dependencies[0].dstSubpass = 0;
+        dependencies[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        dependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependencies[0].srcAccessMask = 0;
+        dependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        dependencies[1].srcSubpass = 0;
+        dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+        dependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependencies[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        dependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        dependencies[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+        VkRenderPassCreateInfo rpInfo {VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
+        rpInfo.attachmentCount = 1;
+        rpInfo.pAttachments = &color;
+        rpInfo.subpassCount = 1;
+        rpInfo.pSubpasses = &subpass;
+        rpInfo.dependencyCount = 2;
+        rpInfo.pDependencies = dependencies;
+        if (vk_.vkCreateRenderPass(device_, &rpInfo, nullptr, &upscaleRenderPass_) != VK_SUCCESS) {
+            ALOGE("vkCreateRenderPass failed for upscaling");
+            return false;
+        }
+    }
+
+    // RCAS reads whole texels, so the sampler never filters
+    if (!upscaleSampler_) {
+        VkSamplerCreateInfo samplerInfo {VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+        samplerInfo.magFilter = VK_FILTER_NEAREST;
+        samplerInfo.minFilter = VK_FILTER_NEAREST;
+        samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        samplerInfo.maxLod = 0.0f;
+        samplerInfo.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
+        if (vk_.vkCreateSampler(device_, &samplerInfo, nullptr, &upscaleSampler_) != VK_SUCCESS) {
+            return false;
+        }
+    }
+    if (!rcasSetLayout_) {
+        VkDescriptorSetLayoutBinding binding {};
+        binding.binding = 0;
+        binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        binding.descriptorCount = 1;
+        binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        binding.pImmutableSamplers = &upscaleSampler_;
+        VkDescriptorSetLayoutCreateInfo layoutInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        layoutInfo.bindingCount = 1;
+        layoutInfo.pBindings = &binding;
+        if (vk_.vkCreateDescriptorSetLayout(device_, &layoutInfo, nullptr, &rcasSetLayout_) != VK_SUCCESS) {
+            return false;
+        }
+    }
+    if (!rcasPool_) {
+        VkDescriptorPoolSize poolSize {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
+        VkDescriptorPoolCreateInfo poolInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+        poolInfo.maxSets = 1;
+        poolInfo.poolSizeCount = 1;
+        poolInfo.pPoolSizes = &poolSize;
+        if (vk_.vkCreateDescriptorPool(device_, &poolInfo, nullptr, &rcasPool_) != VK_SUCCESS) {
+            return false;
+        }
+        VkDescriptorSetAllocateInfo allocInfo {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        allocInfo.descriptorPool = rcasPool_;
+        allocInfo.descriptorSetCount = 1;
+        allocInfo.pSetLayouts = &rcasSetLayout_;
+        if (vk_.vkAllocateDescriptorSets(device_, &allocInfo, &rcasSet_) != VK_SUCCESS) {
+            return false;
+        }
+    }
+    if (!rcasPipelineLayout_) {
+        VkPushConstantRange range {VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PushConstants)};
+        VkPipelineLayoutCreateInfo plInfo {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        plInfo.setLayoutCount = 1;
+        plInfo.pSetLayouts = &rcasSetLayout_;
+        plInfo.pushConstantRangeCount = 1;
+        plInfo.pPushConstantRanges = &range;
+        if (vk_.vkCreatePipelineLayout(device_, &plInfo, nullptr, &rcasPipelineLayout_) != VK_SUCCESS) {
+            return false;
+        }
+    }
+
+    VkImageCreateInfo imageInfo {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.format = upscaleFormat_;
+    imageInfo.extent = {extent.width, extent.height, 1};
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    if (vk_.vkCreateImage(device_, &imageInfo, nullptr, &upscaleImage_) != VK_SUCCESS) {
+        ALOGE("vkCreateImage failed for upscaling");
+        return false;
+    }
+
+    VkMemoryRequirements requirements {};
+    vk_.vkGetImageMemoryRequirements(device_, upscaleImage_, &requirements);
+    VkPhysicalDeviceMemoryProperties memoryProps {};
+    vk_.vkGetPhysicalDeviceMemoryProperties(physicalDevice_, &memoryProps);
+    uint32_t memoryType = UINT32_MAX;
+    for (uint32_t i = 0; i < memoryProps.memoryTypeCount; i++) {
+        if ((requirements.memoryTypeBits & (1u << i)) &&
+                (memoryProps.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) {
+            memoryType = i;
+            break;
+        }
+    }
+    if (memoryType == UINT32_MAX && requirements.memoryTypeBits != 0) {
+        memoryType = static_cast<uint32_t>(__builtin_ctz(requirements.memoryTypeBits));
+    }
+    VkMemoryAllocateInfo allocInfo {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    allocInfo.allocationSize = requirements.size;
+    allocInfo.memoryTypeIndex = memoryType;
+    if (memoryType == UINT32_MAX || vk_.vkAllocateMemory(device_, &allocInfo, nullptr, &upscaleMemory_) != VK_SUCCESS ||
+            vk_.vkBindImageMemory(device_, upscaleImage_, upscaleMemory_, 0) != VK_SUCCESS) {
+        ALOGE("Couldn't allocate memory to upscale into");
+        destroyUpscaleTarget();
+        return false;
+    }
+
+    VkImageViewCreateInfo viewInfo {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    viewInfo.image = upscaleImage_;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = upscaleFormat_;
+    viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    if (vk_.vkCreateImageView(device_, &viewInfo, nullptr, &upscaleView_) != VK_SUCCESS) {
+        destroyUpscaleTarget();
+        return false;
+    }
+
+    VkFramebufferCreateInfo fbInfo {VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+    fbInfo.renderPass = upscaleRenderPass_;
+    fbInfo.attachmentCount = 1;
+    fbInfo.pAttachments = &upscaleView_;
+    fbInfo.width = extent.width;
+    fbInfo.height = extent.height;
+    fbInfo.layers = 1;
+    if (vk_.vkCreateFramebuffer(device_, &fbInfo, nullptr, &upscaleFramebuffer_) != VK_SUCCESS) {
+        destroyUpscaleTarget();
+        return false;
+    }
+
+    VkDescriptorImageInfo imageDescriptor {};
+    imageDescriptor.imageView = upscaleView_;
+    imageDescriptor.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkWriteDescriptorSet write {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    write.dstSet = rcasSet_;
+    write.dstBinding = 0;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.pImageInfo = &imageDescriptor;
+    vk_.vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+
+    upscaleTargetExtent_ = extent;
+    ALOGI("FSR intermediate image %ux%u, format %d", extent.width, extent.height, upscaleFormat_);
     return true;
 }
 

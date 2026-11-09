@@ -360,9 +360,20 @@
     <string name="pyrowave_late_frames_balanced">Balanced</string>
     <string name="pyrowave_late_frames_smooth">Smoothest (show it on time)</string>
     <string name="title_pyrowave_front_buffer">Front buffer rendering</string>
-    <string name="summary_pyrowave_front_buffer">Draw each frame straight into the buffer the screen is reading, timed to each scan of the screen from the host frame times, for the lowest latency. Replaces Frame pacing for PyroWave streams; Lowest latency there keeps the smallest buffer.</string>
+    <string name="summary_pyrowave_front_buffer">Draw each frame straight into the buffer the screen is reading, timed to each scan of the screen from the host frame times, for the lowest latency. For PyroWave, and for other codecs with the Vulkan renderer on. Replaces Frame pacing there; Lowest latency keeps the smallest buffer. Falls back to the normal swapchain if the device has no front buffer.</string>
     <string name="title_pyrowave_gpu_boost">Keep the GPU clock up</string>
-    <string name="summary_pyrowave_gpu_boost">Keep the GPU lightly busy between frames so decoding never waits for it to clock up. Uses more battery.</string>
+    <string name="summary_pyrowave_gpu_boost">Keep the GPU lightly busy between frames so decoding and drawing never wait for it to clock up. For PyroWave, and for other codecs with the Vulkan renderer on. Uses more battery.</string>
+    <string name="category_vulkan_renderer_settings">Vulkan renderer</string>
+    <string name="title_vulkan_renderer">Vulkan renderer for H.264, HEVC and AV1</string>
+    <string name="summary_vulkan_renderer">Decode with MediaCodec as usual, then pace and present the frames with the Vulkan renderer PyroWave uses: host-timed pacing, front buffer rendering and upscaling. Experimental. Falls back to the normal renderer if it cannot start. PyroWave always uses it.</string>
+    <string name="title_vulkan_upscaler">Upscaling</string>
+    <string name="summary_vulkan_upscaler">Scale a stream smaller than the screen up to it on the GPU, for example 720p or 900p on a 1080p screen, to save bandwidth and decode time. FSR 1 is sharper, Snapdragon GSR is lighter. Needs the Vulkan renderer (or PyroWave). Works with HDR, on the HDR10 signal.</string>
+    <string name="vulkan_upscaler_off">Off</string>
+    <string name="vulkan_upscaler_fsr">AMD FSR 1</string>
+    <string name="vulkan_upscaler_sgsr">Snapdragon GSR</string>
+    <string name="toast_vulkan_fallback">The Vulkan renderer could not start, so the normal renderer is used</string>
+    <string name="toast_vulkan_front_buffer_unavailable">This device has no front buffer for the Vulkan renderer, so frames go through the normal swapchain</string>
+    <string name="perf_overlay_renderer">Renderer: %1$s</string>
 
     <string name="title_frame_pacing">Video frame pacing</string>
     <string name="summary_frame_pacing">Specify how to balance video latency and smoothness</string>
