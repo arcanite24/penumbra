@@ -833,4 +833,7 @@
     <string name="bitrate_dialog_apply">Apply</string>
     <string name="bitrate_applied">Bitrate set to %1$s</string>
     <string name="bitrate_failed">Couldn\'t change the bitrate: %1$s</string>
+    <string name="title_auto_bitrate">Automatic bitrate</string>
+    <string name="summary_auto_bitrate">Lowers the bitrate when frames get lost and raises it again after a clean minute, never above the bitrate set here. Needs a host that changes the bitrate live (Vibepollo), and stays off if the host adapts the bitrate itself. The limit is remembered for each network.</string>
+    <string name="bitrate_auto_down">Network busy: bitrate lowered to %1$s</string>
 </resources>

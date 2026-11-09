@@ -294,6 +294,11 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     // Live bitrate through Vibepollo's /bitrate (PEN-10)
     private com.limelight.bitrate.StreamBitrateController streamBitrate;
     private int streamStartKbps;
+    // Client automatic bitrate (PEN-10)
+    private int autoCeilingKbps;
+    private String autoBitrateKey;
+    private long autoUpHoldMs = com.limelight.bitrate.AutoBitrateController.UP_HOLD_MS;
+    private float streamDisplayHz;
 
     public static final String CLIPBOARD_IDENTIFIER = "ArtemisStreaming";
 
@@ -813,6 +818,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
         // Set to the optimal mode for streaming
         float displayRefreshRate = prepareDisplayForRendering(currentDisplay);
+        streamDisplayHz = displayRefreshRate;
         LimeLog.info("Display refresh rate: "+displayRefreshRate);
 
         // If the user requested frame pacing using a capped FPS, we will need to change our
@@ -842,6 +848,28 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         }
 
         streamStartKbps = isMetered ? prefConfig.meteredBitrate : prefConfig.bitrate;
+        autoCeilingKbps = streamStartKbps;
+        if (prefConfig.autoBitrate && !probeMode) {
+            // Start at the limit learnt on this network for this host, if there is one
+            String network = com.limelight.bitrate.AutoBitrateMemory.networkId(this);
+            if (network != null) {
+                autoBitrateKey = com.limelight.bitrate.AutoBitrateMemory.key(getIntent().getStringExtra(EXTRA_PC_UUID), network);
+                com.limelight.bitrate.AutoBitrateMemory.Entry learnt = com.limelight.bitrate.AutoBitrateMemory.recall(this, autoBitrateKey);
+                if (learnt != null) {
+                    autoUpHoldMs = learnt.upHoldMs;
+                    int floor = com.limelight.bitrate.AutoBitrateController.floorKbps(displayWidth, displayHeight, prefConfig.fps);
+                    if (learnt.limitKbps > 0 && learnt.limitKbps < streamStartKbps) {
+                        streamStartKbps = Math.max(Math.min(floor, streamStartKbps), learnt.limitKbps);
+                    }
+                    LimeLog.info("Bitrate: auto: network " + network + " learnt limit " + learnt.limitKbps
+                            + " kbps, starting at " + streamStartKbps + " kbps (ceiling " + autoCeilingKbps + ")");
+                } else {
+                    LimeLog.info("Bitrate: auto: network " + network + ", nothing learnt yet, starting at " + streamStartKbps + " kbps");
+                }
+            } else {
+                LimeLog.info("Bitrate: auto: no network id; nothing will be remembered");
+            }
+        }
 
         StreamConfiguration config = new StreamConfiguration.Builder()
                 .setResolution(
@@ -4409,6 +4437,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                     @Override
                     public void onBitrateApplied(int kbps, String source) {
                         updateStreamBitrateLabel();
+                        if ("auto-down".equals(source) && !prefConfig.disableWarnings) {
+                            displayTransientMessage(getString(R.string.bitrate_auto_down,
+                                    com.limelight.bitrate.StreamBitrateController.formatMbps(kbps)));
+                        }
                         if ("menu".equals(source)) {
                             com.limelight.utils.PenumbraToast.makeText(Game.this,
                                     getString(R.string.bitrate_applied, com.limelight.bitrate.StreamBitrateController.formatMbps(kbps)),
@@ -4429,6 +4461,32 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                         updateStreamBitrateLabel();
                     }
                 });
+        if (prefConfig.autoBitrate) {
+            com.limelight.bitrate.AutoBitrateController auto = new com.limelight.bitrate.AutoBitrateController(
+                    autoCeilingKbps, streamStartKbps,
+                    com.limelight.bitrate.AutoBitrateController.floorKbps(displayWidth, displayHeight, prefConfig.fps),
+                    prefConfig.fps, autoUpHoldMs);
+            auto.setMaxPresentFps(streamDisplayHz);
+            final String key = autoBitrateKey;
+            streamBitrate.enableAuto(auto, new com.limelight.bitrate.StreamBitrateController.StatsSource() {
+                @Override
+                public long[] counters() {
+                    return decoderRenderer != null ? decoderRenderer.getProbeCounters() : null;
+                }
+
+                @Override
+                public int rttMs() {
+                    long info = MoonBridge.getEstimatedRttInfo();
+                    return info == -1 || info == 0 ? 0 : (int) (info >> 32);
+                }
+
+                @Override
+                public long videoBytesReceived() {
+                    return MoonBridge.getVideoBytesReceived();
+                }
+            }, key == null ? null : (limitKbps, upHoldMs) ->
+                    com.limelight.bitrate.AutoBitrateMemory.remember(Game.this, key, limitKbps, upHoldMs));
+        }
         streamBitrate.start();
     }
 
@@ -4436,9 +4494,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         if (streamBitrate == null || decoderRenderer == null) {
             return;
         }
-        decoderRenderer.setStreamBitrateLabel(
-                com.limelight.bitrate.StreamBitrateController.formatMbps(streamBitrate.getCurrentKbps())
-                        + (streamBitrate.isLiveBitrateAvailable() ? "" : " (fixed)"));
+        decoderRenderer.setStreamBitrateLabel(streamBitrate.overlayLabel());
     }
 
     /** The host changes this stream's bitrate live (Vibepollo /bitrate). */
