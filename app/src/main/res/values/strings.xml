@@ -33,6 +33,14 @@
     <string name="pcview_menu_delete_pc">Delete PC</string>
     <string name="pcview_menu_test_network">Test Network Connection</string>
     <string name="pcview_menu_details">View Details</string>
+    <string name="pcview_menu_sleep">Sleep PC</string>
+    <string name="sleep_confirm_title">Put the PC to sleep?</string>
+    <string name="sleep_confirm_message">%1$s will go to sleep. Wake it again with Wake-on-LAN or its power button.</string>
+    <string name="sleep_confirm_yes">Sleep</string>
+    <string name="sleep_requested">Asked %1$s to sleep</string>
+    <string name="sleep_busy">The PC can\'t sleep while an app or stream is running. Quit it first.</string>
+    <string name="sleep_not_allowed">Sleep isn\'t allowed for this device. Allow it for this client in the host\'s web UI.</string>
+    <string name="sleep_failed">Sleep request failed: %1$s</string>
     <string name="pcview_menu_eol">NVIDIA GameStream End-of-Service</string>
     <string name="pcview_menu_open_management_page">Go to Server Config</string>
     <string name="pcview_error_no_management_url">Cannot open server config page, cannot find server address.</string>

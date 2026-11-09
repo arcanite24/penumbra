@@ -11,6 +11,7 @@ import com.limelight.computers.ComputerManagerService;
 import com.limelight.grid.PcGridAdapter;
 import com.limelight.grid.assets.DiskAssetLoader;
 import com.limelight.nvstream.http.ComputerDetails;
+import com.limelight.nvstream.http.HostHttpResponseException;
 import com.limelight.nvstream.http.NvApp;
 import com.limelight.nvstream.http.NvHTTP;
 import com.limelight.nvstream.http.PairingManager;
@@ -135,6 +136,7 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
     private final static int GAMESTREAM_EOL_ID = 11;
     private final static int OPEN_MANAGEMENT_PAGE_ID = 20;
     private final static int PAIR_ID_OTP = 21;
+    private final static int SLEEP_ID = 22;
 
     private void initializeViews() {
         setContentView(R.layout.activity_pc_view);
@@ -454,6 +456,11 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
             }
 
             menu.add(Menu.NONE, FULL_APP_LIST_ID, 4, getResources().getString(R.string.pcview_menu_app_list));
+
+            // Vibepollo hosts that can sleep say so in serverinfo
+            if (computer.details.powerActionVersion >= 1 && computer.details.sleepSupported) {
+                menu.add(Menu.NONE, SLEEP_ID, 4, getResources().getString(R.string.pcview_menu_sleep));
+            }
         }
 
         menu.add(Menu.NONE, TEST_NETWORK_ID, 5, getResources().getString(R.string.pcview_menu_test_network));
@@ -713,6 +720,70 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
         }).start();
     }
 
+    private void confirmSleep(final ComputerDetails computer) {
+        if (!computer.sleepAllowed) {
+            new AlertDialog.Builder(this)
+                    .setTitle(R.string.pcview_menu_sleep)
+                    .setMessage(R.string.sleep_not_allowed)
+                    .setPositiveButton(android.R.string.ok, null)
+                    .show();
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.sleep_confirm_title)
+                .setMessage(getString(R.string.sleep_confirm_message, computer.name))
+                .setPositiveButton(R.string.sleep_confirm_yes, (dialog, which) -> doSleep(computer))
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
+    }
+
+    private void doSleep(final ComputerDetails computer) {
+        if (computer.state == ComputerDetails.State.OFFLINE || computer.activeAddress == null) {
+            com.limelight.utils.PenumbraToast.makeText(PcView.this, getResources().getString(R.string.error_pc_offline), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (managerBinder == null) {
+            com.limelight.utils.PenumbraToast.makeText(PcView.this, getResources().getString(R.string.error_manager_not_running), Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        new Thread(() -> {
+            String message;
+            try {
+                NvHTTP httpConn = new NvHTTP(ServerHelper.getCurrentAddressFromComputer(computer),
+                        computer.httpsPort, managerBinder.getUniqueId(), computer.serverCert,
+                        PlatformBinding.getCryptoProvider(PcView.this));
+                String token = httpConn.getSleepToken();
+                if (token == null) {
+                    message = getString(R.string.sleep_busy);
+                }
+                else {
+                    httpConn.requestSleep(token);
+                    message = getString(R.string.sleep_requested, computer.name);
+                }
+            } catch (HostHttpResponseException e) {
+                LimeLog.warning("Host refused sleep (" + e.getErrorCode() + "): " + e.getErrorMessage());
+                if (e.getErrorCode() == 409) {
+                    message = getString(R.string.sleep_busy);
+                }
+                else if (e.getErrorCode() == 403) {
+                    message = getString(R.string.sleep_not_allowed);
+                }
+                else {
+                    message = getString(R.string.sleep_failed, e.getErrorMessage());
+                }
+            } catch (FileNotFoundException e) {
+                message = getString(R.string.sleep_failed, getString(R.string.error_404));
+            } catch (XmlPullParserException | IOException e) {
+                LimeLog.warning("Sleep request failed: " + e);
+                message = getString(R.string.sleep_failed, e.getMessage());
+            }
+
+            final String toastMessage = message;
+            runOnUiThread(() -> com.limelight.utils.PenumbraToast.makeText(PcView.this, toastMessage, Toast.LENGTH_LONG).show());
+        }).start();
+    }
+
     private void doAppList(ComputerDetails computer, boolean newlyPaired, boolean showHiddenGames) {
         if (computer.state == ComputerDetails.State.OFFLINE) {
             com.limelight.utils.PenumbraToast.makeText(PcView.this, getResources().getString(R.string.error_pc_offline), Toast.LENGTH_SHORT).show();
@@ -746,6 +817,10 @@ public class PcView extends AppCompatActivity implements AdapterFragmentCallback
 
             case UNPAIR_ID:
                 doUnpair(computer.details);
+                return true;
+
+            case SLEEP_ID:
+                confirmSleep(computer.details);
                 return true;
 
             case WOL_ID:

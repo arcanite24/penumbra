@@ -561,6 +561,76 @@ public class NvHTTP {
         }
     }
 
+    /**
+     * Vibepollo's paired-host sleep. The host wants the request bare: no device name or client
+     * id parameters (the TLS client certificate identifies us), so these don't go through
+     * getCompleteUrl().
+     */
+    private Response powerActionCall(String path, String token) throws IOException {
+        HttpUrl.Builder url = getHttpsUrl(true).newBuilder().addPathSegments(path);
+        Request.Builder request = new Request.Builder().url(url.build());
+        if (token != null) {
+            url.addQueryParameter("token", token);
+            // Exactly one query parameter and an empty body, or the host refuses it
+            request.url(url.build()).post(RequestBody.create(new byte[0], null));
+        }
+        else {
+            request.get();
+        }
+        return performAndroidTlsHack(httpClientLongConnectTimeout).newCall(request.build()).execute();
+    }
+
+    private static String powerActionMessage(String xml) {
+        try {
+            XmlPullParserFactory factory = XmlPullParserFactory.newInstance();
+            XmlPullParser xpp = factory.newPullParser();
+            xpp.setInput(new StringReader(xml));
+            for (int type = xpp.getEventType(); type != XmlPullParser.END_DOCUMENT; type = xpp.next()) {
+                if (type == XmlPullParser.START_TAG && "root".equals(xpp.getName())) {
+                    return xpp.getAttributeValue(XmlPullParser.NO_NAMESPACE, "status_message");
+                }
+            }
+        } catch (XmlPullParserException | IOException ignored) {
+        }
+        return null;
+    }
+
+    /**
+     * Asks the host for a single-use sleep token. Returns null when the host can't sleep right
+     * now (an app or stream is running, or sleep isn't allowed for this client).
+     */
+    public String getSleepToken() throws IOException, XmlPullParserException {
+        try (Response response = powerActionCall("power-actions/v1", null)) {
+            String body = response.body() != null ? response.body().string() : "";
+            if (response.code() == 404) {
+                throw new FileNotFoundException("power-actions/v1");
+            }
+            if (!response.isSuccessful()) {
+                String message = powerActionMessage(body);
+                throw new HostHttpResponseException(response.code(), message != null ? message : response.message());
+            }
+            if (!"1".equals(getXmlString(body, "SleepAvailable", false))) {
+                LimeLog.info("Host sleep not available now: allowed=" + getXmlString(body, "SleepAllowed", false)
+                        + " supported=" + getXmlString(body, "SleepSupported", false));
+                return null;
+            }
+            String token = getXmlString(body, "SleepToken", false);
+            return token == null || token.isEmpty() ? null : token.trim();
+        }
+    }
+
+    /** Asks the host to sleep with a token from getSleepToken(); throws when it refuses */
+    public void requestSleep(String token) throws IOException {
+        try (Response response = powerActionCall("power-actions/v1/sleep", token)) {
+            String body = response.body() != null ? response.body().string() : "";
+            if (response.code() != 202) {
+                String message = powerActionMessage(body);
+                throw new HostHttpResponseException(response.code(), message != null ? message : response.message());
+            }
+            LimeLog.info("Host accepted the sleep request");
+        }
+    }
+
     /** Vibepollo's host hardware metrics (JSON), for hosts advertising HardwareMetricsVersion */
     public String getHardwareMetrics() throws IOException {
         return openHttpConnectionToString(httpClientShortConnectTimeout, getHttpsUrl(true), "api/hardware-metrics");
