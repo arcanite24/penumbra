@@ -372,12 +372,89 @@ public class GameMenu implements Game.GameMenuCallbacks {
                     game::rotateScreen));
         }
 
+        // Penumbra (PEN-10): live bitrate, only when the host changes it without a reconnect
+        if (game.isLiveBitrateAvailable()) {
+            options.add(new MenuOption(game.getResources().getString(R.string.game_menu_bitrate,
+                    com.limelight.bitrate.StreamBitrateController.formatMbps(game.getStreamBitrateKbps())),
+                    this::showBitrateDialog));
+        }
+
         options.add(new MenuOption(getString(R.string.game_menu_advanced), true,
                 () -> showAdvancedMenu(device)));
 
         options.add(new MenuOption(getString(R.string.game_menu_cancel), null));
 
         showMenuDialog(getString(R.string.quick_menu_title), options.toArray(new MenuOption[options.size()]));
+    }
+
+    /** A slider for the stream's bitrate, applied live through the host's /bitrate. */
+    private void showBitrateDialog() {
+        int themeResId = game.getApplicationInfo().theme;
+        Context themedContext = new ContextThemeWrapper(dialogScreenContext, themeResId);
+        float density = themedContext.getResources().getDisplayMetrics().density;
+
+        final int maxMbps = Math.max(1, game.getStreamBitrateMaxKbps() / 1000);
+        final int currentMbps = Math.max(1, Math.round(game.getStreamBitrateKbps() / 1000f));
+
+        android.widget.LinearLayout layout = new android.widget.LinearLayout(themedContext);
+        layout.setOrientation(android.widget.LinearLayout.VERTICAL);
+        int pad = Math.round(20 * density);
+        layout.setPadding(pad, Math.round(8 * density), pad, 0);
+
+        final android.widget.TextView value = new android.widget.TextView(themedContext);
+        value.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 22);
+        value.setGravity(android.view.Gravity.CENTER_HORIZONTAL);
+        layout.addView(value);
+
+        final android.widget.SeekBar seek = new android.widget.SeekBar(themedContext);
+        // Progress is Mbps above 1
+        seek.setMax(maxMbps - 1);
+        seek.setProgress(Math.min(maxMbps, currentMbps) - 1);
+        seek.setKeyProgressIncrement(maxMbps > 200 ? 10 : 1);
+        android.widget.LinearLayout.LayoutParams seekParams = new android.widget.LinearLayout.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.WRAP_CONTENT);
+        seekParams.topMargin = Math.round(8 * density);
+        layout.addView(seek, seekParams);
+
+        android.widget.TextView note = new android.widget.TextView(themedContext);
+        note.setText(R.string.bitrate_dialog_message);
+        note.setAlpha(0.7f);
+        android.widget.LinearLayout.LayoutParams noteParams = new android.widget.LinearLayout.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.WRAP_CONTENT);
+        noteParams.topMargin = Math.round(8 * density);
+        layout.addView(note, noteParams);
+
+        final Runnable showValue = () -> value.setText(
+                com.limelight.bitrate.StreamBitrateController.formatMbps((seek.getProgress() + 1) * 1000));
+        showValue.run();
+        seek.setOnSeekBarChangeListener(new android.widget.SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(android.widget.SeekBar seekBar, int progress, boolean fromUser) {
+                showValue.run();
+            }
+
+            @Override
+            public void onStartTrackingTouch(android.widget.SeekBar seekBar) {
+            }
+
+            @Override
+            public void onStopTrackingTouch(android.widget.SeekBar seekBar) {
+            }
+        });
+
+        AlertDialog dialog = new AlertDialog.Builder(themedContext)
+                .setTitle(R.string.bitrate_dialog_title)
+                .setView(layout)
+                .setPositiveButton(R.string.bitrate_dialog_apply, (d, w) -> {
+                    int kbps = (seek.getProgress() + 1) * 1000;
+                    if (kbps != game.getStreamBitrateKbps()) {
+                        game.requestStreamBitrate(kbps);
+                    }
+                })
+                .setNegativeButton(R.string.game_menu_cancel, null)
+                .create();
+        dialog.show();
+        seek.requestFocus();
     }
 
     @Override

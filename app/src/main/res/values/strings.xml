@@ -824,4 +824,13 @@
     <string name="app_replace_message">The host is still running another app. Close it and start %1$s?</string>
     <string name="app_replace_confirm">Close and start</string>
     <string name="app_replace_waiting">Switching apps…</string>
+
+    <!-- Live bitrate (PEN-10) -->
+    <string name="perf_overlay_bitrate">Bitrate: %1$s</string>
+    <string name="game_menu_bitrate">Bitrate · %1$s</string>
+    <string name="bitrate_dialog_title">Stream bitrate</string>
+    <string name="bitrate_dialog_message">The host changes the bitrate without restarting the stream. It may cap it at its own limit.</string>
+    <string name="bitrate_dialog_apply">Apply</string>
+    <string name="bitrate_applied">Bitrate set to %1$s</string>
+    <string name="bitrate_failed">Couldn\'t change the bitrate: %1$s</string>
 </resources>

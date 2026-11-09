@@ -1826,6 +1826,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     sb.append(context.getString(R.string.perf_overlay_lite_netdrops,(float)lastTwo.framesLost / lastTwo.totalFrames * 100));
                     sb.append("\t FPS：");
                     sb.append(context.getString(R.string.perf_overlay_lite_fps, fps.totalFps));
+                    String bitrateLabel = streamBitrateLabel;
+                    if (bitrateLabel != null) {
+                        sb.append('\t').append(context.getString(R.string.perf_overlay_bitrate, bitrateLabel));
+                    }
                     if(Stereo3DRenderer.isActive) {
                         sb.append(" ");
                         sb.append(context.getString(R.string.perf_overlay_ai_fps));
@@ -1858,6 +1862,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     }
                     sb.append('\n');
                     sb.append(context.getString(R.string.perf_overlay_decoder, decoder)).append('\n');
+                    String bitrateLabel = streamBitrateLabel;
+                    if (bitrateLabel != null) {
+                        sb.append(context.getString(R.string.perf_overlay_bitrate, bitrateLabel)).append('\n');
+                    }
                     sb.append(context.getString(R.string.perf_overlay_incomingfps, fps.receivedFps)).append('\n');
                     sb.append(context.getString(R.string.perf_overlay_renderingfps, fps.renderedFps)).append('\n');
                     sb.append(context.getString(R.string.perf_overlay_netdrops,
@@ -2268,6 +2276,13 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
      * {decoderTimeMs, framesReceived, framesRendered, totalFrames, framesLost, uptimeMs}.
      * Updated about once a second when the stats window flips.
      */
+    // Stream bitrate for the stats overlay (PEN-10); null hides the line
+    private volatile String streamBitrateLabel;
+
+    public void setStreamBitrateLabel(String label) {
+        streamBitrateLabel = label;
+    }
+
     public long[] getProbeCounters() {
         VideoStats s = globalVideoStats;
         return new long[] {s.decoderTimeMs, s.totalFramesReceived, s.totalFramesRendered,

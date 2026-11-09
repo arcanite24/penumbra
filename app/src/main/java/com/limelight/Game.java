@@ -291,6 +291,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private boolean probeMode = false;
     private java.util.Map<String, Object> probeOverrides;
 
+    // Live bitrate through Vibepollo's /bitrate (PEN-10)
+    private com.limelight.bitrate.StreamBitrateController streamBitrate;
+    private int streamStartKbps;
+
     public static final String CLIPBOARD_IDENTIFIER = "ArtemisStreaming";
 
     private String appUUID;
@@ -837,6 +841,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             chosenFrameRate *= prefConfig.framePacingWarpFactor;
         }
 
+        streamStartKbps = isMetered ? prefConfig.meteredBitrate : prefConfig.bitrate;
+
         StreamConfiguration config = new StreamConfiguration.Builder()
                 .setResolution(
                         displayWidth,
@@ -848,7 +854,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 .setResolutionScaleFactor(prefConfig.resolutionScaleFactor)
                 .setApp(app)
                 .setEnableUltraLowLatency(prefConfig.enableUltraLowLatency)
-                .setBitrate(isMetered ? prefConfig.meteredBitrate: prefConfig.bitrate)
+                .setBitrate(streamStartKbps)
                 .setEnableSops(prefConfig.enableSops)
                 .enableLocalAudioPlayback(prefConfig.playHostAudio)
                 .setMaxPacketSize(1392)
@@ -3493,6 +3499,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     }
 
     private void stopConnection() {
+        if (streamBitrate != null) {
+            streamBitrate.stop();
+            streamBitrate = null;
+        }
         if (connecting || connected) {
             connecting = connected = false;
             updatePipAutoEnter();
@@ -3813,6 +3823,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
                 if (probeMode) {
                     startProbeMeasurement();
+                } else {
+                    startStreamBitrate();
                 }
             }
         });
@@ -4383,6 +4395,72 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 finish();
             }, measureMs);
         }, warmupMs);
+    }
+
+    // ---------------------------------------------------------------- live bitrate (PEN-10)
+
+    private void startStreamBitrate() {
+        if (httpConn == null || streamBitrate != null) {
+            return;
+        }
+        decoderRenderer.setStreamBitrateLabel(com.limelight.bitrate.StreamBitrateController.formatMbps(streamStartKbps));
+        streamBitrate = new com.limelight.bitrate.StreamBitrateController(httpConn, streamStartKbps,
+                new com.limelight.bitrate.StreamBitrateController.Listener() {
+                    @Override
+                    public void onBitrateApplied(int kbps, String source) {
+                        updateStreamBitrateLabel();
+                        if ("menu".equals(source)) {
+                            com.limelight.utils.PenumbraToast.makeText(Game.this,
+                                    getString(R.string.bitrate_applied, com.limelight.bitrate.StreamBitrateController.formatMbps(kbps)),
+                                    Toast.LENGTH_SHORT).show();
+                        }
+                    }
+
+                    @Override
+                    public void onBitrateFailed(String message, String source) {
+                        if ("menu".equals(source)) {
+                            com.limelight.utils.PenumbraToast.makeText(Game.this,
+                                    getString(R.string.bitrate_failed, message), Toast.LENGTH_LONG).show();
+                        }
+                    }
+
+                    @Override
+                    public void onCapabilitiesKnown(boolean liveBitrate) {
+                        updateStreamBitrateLabel();
+                    }
+                });
+        streamBitrate.start();
+    }
+
+    private void updateStreamBitrateLabel() {
+        if (streamBitrate == null || decoderRenderer == null) {
+            return;
+        }
+        decoderRenderer.setStreamBitrateLabel(
+                com.limelight.bitrate.StreamBitrateController.formatMbps(streamBitrate.getCurrentKbps())
+                        + (streamBitrate.isLiveBitrateAvailable() ? "" : " (fixed)"));
+    }
+
+    /** The host changes this stream's bitrate live (Vibepollo /bitrate). */
+    public boolean isLiveBitrateAvailable() {
+        return streamBitrate != null && streamBitrate.isLiveBitrateAvailable();
+    }
+
+    public int getStreamBitrateKbps() {
+        return streamBitrate != null ? streamBitrate.getCurrentKbps() : streamStartKbps;
+    }
+
+    /** The bitrate slider's top for this stream, kbps. */
+    public int getStreamBitrateMaxKbps() {
+        boolean pyrowave = decoderRenderer != null
+                && (decoderRenderer.getActiveVideoFormat() & MoonBridge.VIDEO_FORMAT_MASK_PYROWAVE) != 0;
+        return Math.max(pyrowave ? 1000000 : 150000, Math.max(streamStartKbps, getStreamBitrateKbps()));
+    }
+
+    public void requestStreamBitrate(int kbps) {
+        if (streamBitrate != null) {
+            streamBitrate.request(kbps, "menu", null);
+        }
     }
 
     public void disconnect() {
