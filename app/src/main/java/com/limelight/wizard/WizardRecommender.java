@@ -169,12 +169,14 @@ public final class WizardRecommender {
             p.codec = "neverh265";
             p.reasons.put(KEY_CODEC, "H.264 is the only codec both devices share in hardware.");
         }
-        if (!pyrowave && r.pyrowaveDecoder && r.hostPyrowave() && r.udpProbeRan) {
-            p.notes.add(r.udpMeasured()
-                    ? "PyroWave wasn't picked: the UDP test passed at " + WizardProbes.mbps(r.udpCapacityKbps)
-                            + ", less than PyroWave needs at this resolution and frame rate."
-                    : "PyroWave wasn't picked: the UDP test found no rate this link carries cleanly"
-                            + (r.udpNote != null ? " (" + r.udpNote + ")." : "."));
+        if (r.pyrowaveDecoder && r.hostPyrowave() && r.udpProbeRan) {
+            if (!pyrowave && r.udpMeasured()) {
+                p.notes.add("PyroWave wasn't picked: the UDP test passed at " + WizardProbes.mbps(r.udpCapacityKbps)
+                        + ", less than PyroWave needs at this resolution and frame rate.");
+            } else if (!r.udpMeasured()) {
+                p.notes.add("The UDP test found no clean rate" + (r.udpNote != null ? " (" + r.udpNote + ")" : "")
+                        + ", so PyroWave was judged from the link speed instead and no frame pace was saved.");
+            }
         }
 
         // HDR

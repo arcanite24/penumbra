@@ -11,9 +11,15 @@ import java.util.Locale;
  * client records when each sequence number arrived. The pass rule is the one Vibepollo documents
  * for calibration (docs/pyrowave-protocol.md, "FEC-inclusive recommendations and UDP
  * calibration"): every planned packet sent, the sender within 2% of its 2 s, at most 0.1% loss
- * overall and 1% in any 100 ms window, p99 transit variation at most 4 ms and delay growth at
- * most 2 ms. Transit is measured against the sender's 1 ms schedule and taken relative to the
- * fastest packet of the run, so the two clocks never need to agree.
+ * overall and 1% in any 100 ms window. Transit is measured against the sender's 1 ms schedule and
+ * taken relative to the fastest packet of the run, so the two clocks never need to agree.
+ * <p>
+ * Timing is judged relative to a baseline, not against the documented absolute 4 ms: the client
+ * timestamps arrivals in Java on a phone, and on a busy LAN even a 10 Mbps run showed a 26 ms p99
+ * with no loss (PEN-10 device test), so an absolute limit measured the phone and the LAN's own
+ * jitter, never the capacity. The search first runs a low-rate baseline; a rate then passes when
+ * its p99 transit variation stays within {@link #DELAY_P99_MARGIN_MS} of the baseline's and the
+ * delay doesn't grow (a queue building up) by more than {@link #DELAY_GROWTH_LIMIT_MS} in 2 s.
  * <p>
  * Frame-shaped (pace) probes are bursty on purpose, so only their loss is graded, with the same
  * limits, plus no video frame missing more than 10% of its packets.
@@ -29,8 +35,12 @@ public final class PyroWaveUdpGrade {
 
     public static final double LOSS_LIMIT_PCT = 0.1;
     public static final double WINDOW_LOSS_LIMIT_PCT = 1.0;
-    public static final double DELAY_P99_LIMIT_MS = 4.0;
-    public static final double DELAY_GROWTH_LIMIT_MS = 2.0;
+    /** p99 transit variation may exceed the baseline run's by this much. */
+    public static final double DELAY_P99_MARGIN_MS = 4.0;
+    /** Mean delay of the last 100 ms minus the first: a queue building up. */
+    public static final double DELAY_GROWTH_LIMIT_MS = 3.0;
+    /** The baseline run: low enough not to queue anywhere on a LAN. */
+    public static final int BASELINE_KBPS = 10000;
     public static final double FRAME_LOSS_LIMIT_PCT = 10.0;
 
     private PyroWaveUdpGrade() {}
@@ -53,6 +63,8 @@ public final class PyroWaveUdpGrade {
         public double delayP99Ms = Double.NaN;
         public double delayGrowthMs = Double.NaN;
         public double worstFrameLossPct = 100;
+        /** The baseline run's p99, ms; NaN: this is the baseline, judged against itself. */
+        public double baselineP99Ms = Double.NaN;
         public String error; // the probe itself failed (host refused, timed out ...)
 
         public boolean senderOnTime() {
@@ -69,7 +81,11 @@ public final class PyroWaveUdpGrade {
             if (lossPct > LOSS_LIMIT_PCT) return String.format(Locale.US, "%.2f%% of packets lost", lossPct);
             if (worstWindowLossPct > WINDOW_LOSS_LIMIT_PCT) return String.format(Locale.US, "%.1f%% lost in one 100 ms window", worstWindowLossPct);
             if (fps == 0) {
-                if (!(delayP99Ms <= DELAY_P99_LIMIT_MS)) return String.format(Locale.US, "delivery varied by %.1f ms (p99)", delayP99Ms);
+                double base = Double.isNaN(baselineP99Ms) ? delayP99Ms : baselineP99Ms;
+                if (!(delayP99Ms <= base + DELAY_P99_MARGIN_MS)) {
+                    return String.format(Locale.US, "delivery varied by %.1f ms (p99), %.1f ms more than at the baseline",
+                            delayP99Ms, delayP99Ms - base);
+                }
                 if (!(delayGrowthMs <= DELAY_GROWTH_LIMIT_MS)) return String.format(Locale.US, "delay grew by %.1f ms", delayGrowthMs);
             } else if (worstFrameLossPct > FRAME_LOSS_LIMIT_PCT) {
                 return String.format(Locale.US, "a frame lost %.0f%% of its packets", worstFrameLossPct);
@@ -83,9 +99,11 @@ public final class PyroWaveUdpGrade {
 
         @Override
         public String toString() {
-            return String.format(Locale.US, "%d kbps%s: sent %d/%d in %.0f ms, received %d, loss %.3f%%, worst 100 ms %.2f%%, p99 %.2f ms, growth %.2f ms%s -> %s",
+            return String.format(Locale.US, "%d kbps%s: sent %d/%d in %.0f ms, received %d, loss %.3f%%, worst 100 ms %.2f%%, p99 %.2f ms%s, growth %.2f ms%s -> %s",
                     kbps, fps > 0 ? String.format(Locale.US, " as %d fps frames paced at %d kbps", fps, paceKbps) : "",
-                    sent, expected, senderMs, received, lossPct, worstWindowLossPct, delayP99Ms, delayGrowthMs,
+                    sent, expected, senderMs, received, lossPct, worstWindowLossPct, delayP99Ms,
+                    Double.isNaN(baselineP99Ms) ? "" : String.format(Locale.US, " (baseline %.2f)", baselineP99Ms),
+                    delayGrowthMs,
                     fps > 0 ? String.format(Locale.US, ", worst frame %.1f%%", worstFrameLossPct) : "",
                     passed() ? "pass" : failure());
         }
@@ -165,9 +183,17 @@ public final class PyroWaveUdpGrade {
         Result run(int kbps, int fps, int paceKbps) throws InterruptedException;
     }
 
+    /** Told about each capacity run once it is graded against the baseline. */
+    public interface Graded {
+        void onGraded(Result r);
+    }
+
     public static final class Capacity {
-        /** Highest rate that passed and then passed again at 95%, kbps; 0 when none. */
+        /** Highest passing rate, kbps (confirmed at 95% unless only the baseline passed); 0 when none. */
         public int kbps;
+        /** The search passed at the cap: the link carries at least kbps. */
+        public boolean atCap;
+        public Result baseline;
         public Result last;
         public int probes;
     }
@@ -177,25 +203,41 @@ public final class PyroWaveUdpGrade {
     }
 
     /**
-     * Starts at startKbps, grows 25% while passing, then bisects the passing/failing bracket down
-     * to stepKbps; the best pass is then confirmed afresh at 95% (twice, as Vibepollo's own
-     * calibration does). A failed confirmation retries 20% lower. At most maxProbes runs.
+     * Runs a baseline at baselineKbps, then starts at startKbps, grows 25% while passing, and
+     * bisects the passing/failing bracket down to stepKbps; the best pass is then confirmed afresh
+     * at 95% (twice, as Vibepollo's own calibration does), and a failed confirmation retries 20%
+     * lower. Every run after the baseline is judged against the baseline's p99. At most maxProbes
+     * runs. No rate when the baseline itself loses packets or can't run.
      */
-    public static Capacity searchCapacity(int startKbps, int capKbps, int stepKbps, int maxProbes, Probe probe)
-            throws InterruptedException {
+    public static Capacity searchCapacity(int baselineKbps, int startKbps, int capKbps, int stepKbps, int maxProbes,
+                                          Probe probe, Graded graded) throws InterruptedException {
         Capacity c = new Capacity();
         int cap = Math.min(MAX_KBPS, round5(capKbps));
         if (cap < MIN_KBPS) return c;
-        int low = 0, high = cap + MIN_KBPS;
-        int next = Math.max(MIN_KBPS, Math.min(cap, round5(startKbps)));
+
+        int baseKbps = Math.max(MIN_KBPS, Math.min(cap, round5(baselineKbps)));
+        Result base = probe.run(baseKbps, 0, 0);
+        c.probes++;
+        c.last = c.baseline = base;
+        if (graded != null) graded.onGraded(base);
+        if (!base.passed()) {
+            return c;
+        }
+        final double baselineP99 = base.delayP99Ms;
+
+        int low = baseKbps, high = cap + MIN_KBPS;
+        int next = baseKbps >= cap ? cap : Math.max(baseKbps + MIN_KBPS, Math.min(cap, round5(startKbps)));
         // Leave room for the confirmation runs
         int searchBudget = Math.max(1, maxProbes - 2);
-        while (c.probes < searchBudget) {
-            Result r = probe.run(next, 0, 0);
+        while (c.probes < searchBudget && next > low) {
+            Result r = run(probe, next, baselineP99, graded);
             c.probes++;
             c.last = r;
             if (r.error != null && r.expected == 0) {
-                // The probe itself can't run (host refused, UDP blocked): searching further won't help
+                // The probe itself stopped working (host refused, UDP blocked): searching further
+                // won't help, but what passed so far stands
+                c.kbps = low;
+                c.atCap = low >= cap;
                 return c;
             }
             if (r.passed()) {
@@ -209,25 +251,42 @@ public final class PyroWaveUdpGrade {
                 if (next <= low) break;
             }
         }
-        if (low == 0) return c;
-        int confirm = Math.max(MIN_KBPS, round5(low * 0.95));
+        if (low <= baseKbps) {
+            // Only the baseline passed: that's the rate
+            c.kbps = baseKbps;
+            c.atCap = baseKbps >= cap;
+            return c;
+        }
+        boolean passedCap = low >= cap;
+        int confirm = Math.max(baseKbps, round5(low * 0.95));
         while (c.probes < maxProbes) {
-            Result r = probe.run(confirm, 0, 0);
+            Result r = run(probe, confirm, baselineP99, graded);
             c.probes++;
             c.last = r;
             if (r.passed() && c.probes < maxProbes) {
-                r = probe.run(confirm, 0, 0);
+                r = run(probe, confirm, baselineP99, graded);
                 c.probes++;
                 c.last = r;
             }
             if (r.passed()) {
                 c.kbps = confirm;
+                c.atCap = passedCap;
                 return c;
             }
-            if (confirm == MIN_KBPS) break;
-            confirm = Math.max(MIN_KBPS, round5(confirm * 0.8));
+            passedCap = false;
+            if (confirm <= baseKbps) break;
+            confirm = Math.max(baseKbps, round5(confirm * 0.8));
         }
+        // No confirmation held: the baseline still passed
+        c.kbps = baseKbps;
         return c;
+    }
+
+    private static Result run(Probe probe, int kbps, double baselineP99, Graded graded) throws InterruptedException {
+        Result r = probe.run(kbps, 0, 0);
+        r.baselineP99Ms = baselineP99;
+        if (graded != null) graded.onGraded(r);
+        return r;
     }
 
     public static final class Pace {

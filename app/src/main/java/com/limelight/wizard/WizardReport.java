@@ -127,10 +127,11 @@ public class WizardReport {
 
     /**
      * The most a PyroWave stream should use, kbps: 90% of the measured UDP capacity when the probe
-     * ran, otherwise two thirds of the link speed. 0 when PyroWave shouldn't be used.
+     * found a clean rate, otherwise (no probe, or no clean rate) two thirds of the link speed.
+     * 0 when PyroWave shouldn't be used.
      */
     public int pyrowaveBudgetKbps() {
-        if (udpProbeRan) {
+        if (udpMeasured()) {
             return (int) (udpCapacityKbps * 0.9);
         }
         return (int) (pyrowaveLinkMbps() * 1000 * 0.65);
@@ -142,7 +143,8 @@ public class WizardReport {
      */
     public int pyrowaveLinkMbps() {
         if (!hostOnLan || place == PLACE_REMOTE) return 0;
-        if (udpProbeRan) return udpCapacityKbps / 1000;
+        // A probe that found no clean rate doesn't disqualify PyroWave: the link-speed rule applies
+        if (udpMeasured()) return udpCapacityKbps / 1000;
         if (link == LINK_ETHERNET) return 1000;
         if (link == LINK_WIFI && wifiFreqMhz >= 4900 && wifiLinkMbps >= 600 && wifiRssi >= -62) return wifiLinkMbps;
         return 0;

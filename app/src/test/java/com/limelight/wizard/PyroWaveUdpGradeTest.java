@@ -72,27 +72,51 @@ public class PyroWaveUdpGradeTest {
     }
 
     @Test
-    public void transitVariationOverFourMsFails() {
+    public void transitVariationIsJudgedAgainstTheBaseline() {
         int expected = 20000;
         // 2% of the packets arrive 5 ms late: p99 is 5 ms
         PyroWaveUdpGrade.Result r = PyroWaveUdpGrade.grade(200000, 0, 0, expected, expected, 2000,
                 onSchedule(expected, 1, 5, 50));
         assertEquals(5.0, r.delayP99Ms, 0.01);
+        // As its own baseline it passes; against a clean baseline it's 5 ms worse
+        assertTrue(r.toString(), r.passed());
+        r.baselineP99Ms = 0.5;
         assertFalse(r.passed());
+        assertTrue(r.failure(), r.failure().contains("p99"));
+        // Within 4 ms of the baseline passes
+        r.baselineP99Ms = 1.0;
+        assertTrue(r.toString(), r.passed());
         // 0.5% late does not move p99
         r = PyroWaveUdpGrade.grade(200000, 0, 0, expected, expected, 2000, onSchedule(expected, 1, 5, 200));
+        r.baselineP99Ms = 0;
         assertTrue(r.toString(), r.passed());
+    }
+
+    @Test
+    public void busyLanBaselineJitterNoLongerFailsEveryRate() {
+        // Device test on a busy LAN: 0% loss at every rate, p99 26.5 ms at 10 Mbps, 25.3 at 25,
+        // 29.7 at 50, 47.5 at 100. With the 26.5 ms baseline, 25 and 50 pass and 100 fails.
+        int expected = 20000;
+        PyroWaveUdpGrade.Result at50 = PyroWaveUdpGrade.grade(50000, 0, 0, expected, expected, 2000,
+                onSchedule(expected, 1, 29.7, 50));
+        at50.baselineP99Ms = 26.5;
+        assertTrue(at50.toString(), at50.passed());
+        PyroWaveUdpGrade.Result at100 = PyroWaveUdpGrade.grade(100000, 0, 0, expected, expected, 2000,
+                onSchedule(expected, 1, 47.5, 50));
+        at100.baselineP99Ms = 26.5;
+        assertFalse(at100.passed());
     }
 
     @Test
     public void growingDelayFails() {
         int expected = 20000;
         long[] a = onSchedule(expected, 1, 0, 0);
-        // A queue building up: 3 ms more delay by the end
-        for (int seq = 0; seq < expected; seq++) a[seq] += (long) (3000.0 * seq / expected);
+        // A queue building up: 4 ms more delay by the end
+        for (int seq = 0; seq < expected; seq++) a[seq] += (long) (4000.0 * seq / expected);
         PyroWaveUdpGrade.Result r = PyroWaveUdpGrade.grade(200000, 0, 0, expected, expected, 2000, a);
-        assertTrue(r.delayGrowthMs > 2.0);
+        assertTrue(r.delayGrowthMs > PyroWaveUdpGrade.DELAY_GROWTH_LIMIT_MS);
         assertFalse(r.passed());
+        assertTrue(r.failure(), r.failure().contains("grew"));
     }
 
     @Test
@@ -119,51 +143,89 @@ public class PyroWaveUdpGradeTest {
         assertFalse(r.passed());
     }
 
-    /** A fake link that passes everything up to limitKbps. */
-    private static PyroWaveUdpGrade.Probe link(int limitKbps, List<Integer> log) {
+    /**
+     * A fake link: up to limitKbps no loss and baseJitterMs of p99 variation (the phone and the
+     * LAN); above it, 2% loss and 20 ms more variation (a queue).
+     */
+    private static PyroWaveUdpGrade.Probe link(int limitKbps, double baseJitterMs, List<Integer> log) {
         return (kbps, fps, pace) -> {
             log.add(fps > 0 ? -pace : kbps);
             int expected = PyroWaveUdpGrade.expectedPackets(kbps, PACKET);
-            long[] a = onSchedule(expected, 1, 0, 0);
             boolean ok = fps > 0 ? pace <= limitKbps : kbps <= limitKbps;
+            long[] a = onSchedule(expected, 1, baseJitterMs + (ok ? 0 : 20), 50);
             if (!ok) Arrays.fill(a, 0, expected / 50, -1);
             return PyroWaveUdpGrade.grade(kbps, fps, pace, expected, expected, 2000, a);
         };
     }
 
+    /** Fails only on timing above limitKbps (no loss anywhere), like the busy LAN. */
+    private static PyroWaveUdpGrade.Probe jitteryLink(int limitKbps, double baseJitterMs, List<Integer> log) {
+        return (kbps, fps, pace) -> {
+            log.add(kbps);
+            int expected = PyroWaveUdpGrade.expectedPackets(kbps, PACKET);
+            long[] a = onSchedule(expected, 1, baseJitterMs + (kbps <= limitKbps ? 0 : 20), 50);
+            return PyroWaveUdpGrade.grade(kbps, fps, pace, expected, expected, 2000, a);
+        };
+    }
+
+    private static PyroWaveUdpGrade.Capacity search(int start, int cap, int maxProbes, PyroWaveUdpGrade.Probe p)
+            throws InterruptedException {
+        return PyroWaveUdpGrade.searchCapacity(PyroWaveUdpGrade.BASELINE_KBPS, start, cap, 10000, maxProbes, p, null);
+    }
+
     @Test
     public void capacitySearchFindsTheLimitAndConfirmsAtNinetyFivePercent() throws Exception {
         List<Integer> log = new ArrayList<>();
-        PyroWaveUdpGrade.Capacity c = PyroWaveUdpGrade.searchCapacity(400000, 1000000, 10000, 12, link(620000, log));
-        assertTrue(log.toString(), c.kbps > 0);
+        PyroWaveUdpGrade.Capacity c = search(400000, 1000000, 12, link(620000, 0, log));
+        assertEquals("baseline first", Integer.valueOf(PyroWaveUdpGrade.BASELINE_KBPS), log.get(0));
         assertTrue("found " + c.kbps + " " + log, c.kbps <= 620000 && c.kbps >= 540000);
+        assertFalse(c.atCap);
         assertTrue(c.probes <= 12);
         // The last two runs are the confirmation, at 95% of the best pass
         assertEquals(log.get(log.size() - 1), log.get(log.size() - 2));
     }
 
     @Test
-    public void capacitySearchStopsAtTheCap() throws Exception {
+    public void baselineJitterDoesNotHideTheCapacity() throws Exception {
+        // 25 ms of variation even at 10 Mbps: the old absolute 4 ms rule found nothing
         List<Integer> log = new ArrayList<>();
-        PyroWaveUdpGrade.Capacity c = PyroWaveUdpGrade.searchCapacity(600000, 1000000, 10000, 12, link(5000000, log));
-        assertEquals(950000, c.kbps);
-        assertTrue(log.toString(), log.contains(1000000));
+        PyroWaveUdpGrade.Capacity c = search(200000, 400000, 10, jitteryLink(150000, 25, log));
+        assertEquals(25.0, c.baseline.delayP99Ms, 0.01);
+        assertTrue("found " + c.kbps + " " + log, c.kbps >= 120000 && c.kbps <= 150000);
     }
 
     @Test
-    public void capacitySearchGivesNothingOnABadLink() throws Exception {
+    public void capacitySearchStopsAtTheCap() throws Exception {
         List<Integer> log = new ArrayList<>();
-        PyroWaveUdpGrade.Capacity c = PyroWaveUdpGrade.searchCapacity(400000, 1000000, 10000, 10, link(0, log));
-        assertEquals(0, c.kbps);
-        assertNotNull(c.last);
-        assertFalse(c.last.passed());
+        PyroWaveUdpGrade.Capacity c = search(300000, 572000, 12, link(5000000, 0, log));
+        // round5(572000) = 570000; confirmed at 95%
+        assertEquals(540000, c.kbps);
+        assertTrue(c.atCap);
+        for (int kbps : log) assertTrue("never above the cap: " + log, kbps <= 570000);
+    }
+
+    @Test
+    public void onlyTheBaselinePassing() throws Exception {
+        List<Integer> log = new ArrayList<>();
+        PyroWaveUdpGrade.Capacity c = search(200000, 400000, 10, jitteryLink(12000, 25, log));
+        assertEquals(PyroWaveUdpGrade.BASELINE_KBPS, c.kbps);
         assertTrue(c.probes <= 10);
+    }
+
+    @Test
+    public void capacitySearchGivesNothingWhenTheBaselineLoses() throws Exception {
+        List<Integer> log = new ArrayList<>();
+        PyroWaveUdpGrade.Capacity c = search(400000, 1000000, 10, link(0, 0, log));
+        assertEquals(0, c.kbps);
+        assertEquals(1, c.probes);
+        assertNotNull(c.baseline);
+        assertFalse(c.last.passed());
     }
 
     @Test
     public void probeErrorStopsTheSearch() throws Exception {
         final int[] runs = {0};
-        PyroWaveUdpGrade.Capacity c = PyroWaveUdpGrade.searchCapacity(400000, 1000000, 10000, 10, (kbps, fps, pace) -> {
+        PyroWaveUdpGrade.Capacity c = search(400000, 1000000, 10, (kbps, fps, pace) -> {
             runs[0]++;
             PyroWaveUdpGrade.Result r = new PyroWaveUdpGrade.Result();
             r.error = "Stop streaming before testing bandwidth";
@@ -176,7 +238,7 @@ public class PyroWaveUdpGradeTest {
     @Test
     public void paceSearchStepsDownFromTheLink() throws Exception {
         List<Integer> log = new ArrayList<>();
-        PyroWaveUdpGrade.Pace p = PyroWaveUdpGrade.searchPace(200000, 60, 1000000, 250000, 6, link(700000, log));
+        PyroWaveUdpGrade.Pace p = PyroWaveUdpGrade.searchPace(200000, 60, 1000000, 250000, 6, link(700000, 0, log));
         // 1000 -> 800 fail, 640 passes twice
         assertEquals(640000, p.paceKbps);
         assertEquals(Arrays.asList(-1000000, -800000, -640000, -640000), log);
@@ -185,7 +247,7 @@ public class PyroWaveUdpGradeTest {
     @Test
     public void paceSearchNeverGoesBelowTheFloor() throws Exception {
         List<Integer> log = new ArrayList<>();
-        PyroWaveUdpGrade.Pace p = PyroWaveUdpGrade.searchPace(200000, 60, 1000000, 600000, 6, link(100000, log));
+        PyroWaveUdpGrade.Pace p = PyroWaveUdpGrade.searchPace(200000, 60, 1000000, 600000, 6, link(100000, 0, log));
         assertEquals(0, p.paceKbps);
         for (int pace : log) assertTrue(-pace >= 600000);
     }
