@@ -1380,27 +1380,60 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         }
     }
 
-    public void setMetaKeyCaptureState(boolean enabled) {
-        // This uses custom APIs present on some Samsung devices to allow capture of
-        // meta key events while streaming.
-        try {
-            Class<?> semWindowManager = Class.forName("com.samsung.android.view.SemWindowManager");
-            Method getInstanceMethod = semWindowManager.getMethod("getInstance");
-            Object manager = getInstanceMethod.invoke(null);
+    // Build.VERSION_CODES_FULL.BAKLAVA_1: SDK_INT_FULL is major * 100000 + minor
+    private static final int SDK_INT_FULL_BAKLAVA_1 = 36 * 100000 + 1;
 
-            if (manager != null) {
-                Class<?>[] parameterTypes = new Class<?>[2];
-                parameterTypes[0] = ComponentName.class;
-                parameterTypes[1] = boolean.class;
-                Method requestMetaKeyEventMethod = semWindowManager.getDeclaredMethod("requestMetaKeyEvent", parameterTypes);
-                requestMetaKeyEventMethod.invoke(manager, this.getComponentName(), enabled);
+    // Uses WindowManager.LayoutParams.setKeyboardCaptureEnabled() on Android 16 QPR2 (API 36.1)
+    // and later. Returns false where it isn't available, so the caller falls back.
+    private boolean setNativeKeyboardCapture(boolean enabled) {
+        try {
+            int sdkIntFull = Build.VERSION.class.getField("SDK_INT_FULL").getInt(null);
+            if (sdkIntFull < SDK_INT_FULL_BAKLAVA_1) {
+                return false;
             }
-            else {
-                LimeLog.warning("SemWindowManager.getInstance() returned null");
+
+            WindowManager.LayoutParams windowLayoutParams = getWindow().getAttributes();
+            WindowManager.LayoutParams.class.getMethod("setKeyboardCaptureEnabled", boolean.class)
+                    .invoke(windowLayoutParams, enabled);
+            getWindow().setAttributes(windowLayoutParams);
+            return true;
+        } catch (ReflectiveOperationException e) {
+            return false;
+        }
+    }
+
+    public void setMetaKeyCaptureState(boolean enabled) {
+        // Android has native keyboard capture support starting in API 36.1. Penumbra compiles
+        // against API 36, so the 36.1 APIs are reached by reflection.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA && setNativeKeyboardCapture(enabled)) {
+            return;
+        }
+        else {
+            // This uses custom APIs present on some Samsung devices to allow capture of
+            // meta key events while streaming.
+            try {
+                Class<?> semWindowManager = Class.forName("com.samsung.android.view.SemWindowManager");
+                Method getInstanceMethod = semWindowManager.getMethod("getInstance");
+                Object manager = getInstanceMethod.invoke(null);
+
+                if (manager != null) {
+                    Class<?>[] parameterTypes = new Class<?>[2];
+                    parameterTypes[0] = ComponentName.class;
+                    parameterTypes[1] = boolean.class;
+                    Method requestMetaKeyEventMethod = semWindowManager.getDeclaredMethod("requestMetaKeyEvent", parameterTypes);
+                    requestMetaKeyEventMethod.invoke(manager, this.getComponentName(), enabled);
+                }
+                else {
+                    LimeLog.warning("SemWindowManager.getInstance() returned null");
+                }
+            } catch (ClassNotFoundException ignored) {
+            } catch (NoSuchMethodException e) {
+                e.printStackTrace();
+            } catch (InvocationTargetException e) {
+                e.printStackTrace();
+            } catch (IllegalAccessException e) {
+                e.printStackTrace();
             }
-        } catch (ClassNotFoundException | NoSuchMethodException | InvocationTargetException |
-                 IllegalAccessException e) {
-            e.printStackTrace();
         }
     }
 
@@ -2069,6 +2102,18 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         }
         if (event.isMetaPressed()) {
             modifier |= KeyboardPacket.MODIFIER_META;
+        }
+        return applyKeySpecificModifiers(event.getKeyCode(), modifier);
+    }
+
+    private byte getModifierState(int keyCode) {
+        return applyKeySpecificModifiers(keyCode, getModifierState());
+    }
+
+    private byte applyKeySpecificModifiers(int keyCode, byte modifier) {
+        if (keyCode == KeyEvent.KEYCODE_PLUS) {
+            // The host protocol has a single US =/+ virtual key, so Android's semantic plus key needs Shift.
+            modifier |= KeyboardPacket.MODIFIER_SHIFT;
         }
         return modifier;
     }
@@ -3939,6 +3984,17 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             holder.getSurface().setFrameRate(desiredFrameRate,
                     Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE);
         }
+
+        // Disable producer throttling on the underlying surface for reduced latency (Android 17+).
+        // Penumbra compiles against API 36, so Surface.setProducerThrottlingEnabled() is called by reflection.
+        if (Build.VERSION.SDK_INT >= 37) {
+            try {
+                Surface.class.getMethod("setProducerThrottlingEnabled", boolean.class)
+                        .invoke(holder.getSurface(), false);
+            } catch (ReflectiveOperationException e) {
+                LimeLog.warning("Unable to disable producer throttling: " + e);
+            }
+        }
     }
 
     @Override
@@ -4016,10 +4072,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             }
 
             if (buttonDown) {
-                conn.sendKeyboardInput(keyMap, KeyboardPacket.KEY_DOWN, getModifierState(), (byte)0);
+                conn.sendKeyboardInput(keyMap, KeyboardPacket.KEY_DOWN, getModifierState(keyCode), (byte)0);
             }
             else {
-                conn.sendKeyboardInput(keyMap, KeyboardPacket.KEY_UP, getModifierState(), (byte)0);
+                conn.sendKeyboardInput(keyMap, KeyboardPacket.KEY_UP, getModifierState(keyCode), (byte)0);
             }
         }
     }
