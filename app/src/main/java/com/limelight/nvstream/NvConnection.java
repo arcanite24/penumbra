@@ -317,6 +317,21 @@ public class NvConnection {
             }
         }
         
+        if (context.streamConfig.getResumeOnly()) {
+            // Reconnecting after a dropout: the same game must still be running. Never launch
+            // one, and never quit whatever runs instead.
+            String runningUuid = h.getCurrentGameUUID(serverInfo);
+            boolean sameGame = (app.getAppId() != 0 && h.getCurrentGame(serverInfo) == app.getAppId()) ||
+                    (runningUuid != null && !runningUuid.isEmpty() && Objects.equals(runningUuid, app.getAppUUID()));
+            if (!sameGame) {
+                LimeLog.warning("Stream recovery: " + app.getAppName() + " is no longer running on the host (running: " +
+                        h.getCurrentGame(serverInfo) + "); not resuming");
+                context.connListener.displayMessage(app.getAppName() + " is no longer running on the host, so the stream wasn't resumed.");
+                return false;
+            }
+            LimeLog.info("Stream recovery: resuming " + app.getAppName());
+        }
+
         // If there's a game running, resume it
         if (h.getCurrentGame(serverInfo) != 0 || (h.getCurrentGameUUID(serverInfo) != null && !h.getCurrentGameUUID(serverInfo).isEmpty())) {
             try {

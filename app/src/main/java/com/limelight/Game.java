@@ -114,6 +114,7 @@ import androidx.core.app.NotificationManagerCompat;
 import androidx.preference.PreferenceManager;
 
 import android.os.Looper;
+import android.os.SystemClock;
 import java.nio.charset.StandardCharsets;
 import java.util.HashSet;
 import java.util.List;
@@ -316,6 +317,15 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     private NvHTTP httpConn;
     private volatile com.limelight.utils.HostHardwareMetrics hostMetrics;
+    private volatile com.limelight.utils.WifiDiagnostics wifiDiagnostics;
+    private final com.limelight.utils.StallRhythm stallRhythm = new com.limelight.utils.StallRhythm();
+
+    // Automatic recovery (see StreamRecovery)
+    private boolean recoveryAttempt;
+    private boolean recoveryRestarting;
+    private long connectedAtMs = -1;
+    private AlertDialog recoveryDialog;
+    private final Handler recoveryHandler = new Handler(Looper.getMainLooper());
 
     public interface GameMenuCallbacks {
         void showMenu(GameInputDevice devic);
@@ -846,6 +856,21 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             chosenFrameRate *= prefConfig.framePacingWarpFactor;
         }
 
+        // Is this activity reconnecting a stream that dropped? Then it only resumes.
+        String recoveryPcUuid = getIntent().getStringExtra(EXTRA_PC_UUID);
+        recoveryAttempt = prefConfig.autoRecoverStream && !probeMode &&
+                StreamRecovery.takePending(recoveryPcUuid, appId);
+        if (recoveryAttempt) {
+            LimeLog.info("Stream recovery: reconnecting, " + StreamRecovery.describe());
+            if (spinner != null) {
+                spinner.setMessage(getResources().getString(R.string.recovery_reconnecting,
+                        StreamRecovery.attempt(), StreamRecovery.MAX_ATTEMPTS));
+            }
+        }
+        else {
+            StreamRecovery.reset();
+        }
+
         StreamConfiguration config = new StreamConfiguration.Builder()
                 .setResolution(
                         displayWidth,
@@ -856,6 +881,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 .setVirtualDisplay(vDisplay)
                 .setResolutionScaleFactor(prefConfig.resolutionScaleFactor)
                 .setApp(app)
+                .setResumeOnly(recoveryAttempt)
                 .setEnableUltraLowLatency(prefConfig.enableUltraLowLatency)
                 .setBitrate(isMetered ? prefConfig.meteredBitrate: prefConfig.bitrate)
                 .setEnableSops(prefConfig.enableSops)
@@ -1810,6 +1836,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     protected void onStop() {
         super.onStop();
 
+        if (recoveryDialog != null && !recoveryRestarting) {
+            cancelRecovery(false);
+        }
+
         SpinnerDialog.closeDialogs(this);
         Dialog.closeDialogs();
 
@@ -1870,7 +1900,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 message += selectedVideoFormat;
             }
 
-            if (message != null) {
+            if (message != null && !recoveryRestarting) {
                 if (prefConfig.enableLatencyToast) {
                     com.limelight.utils.PenumbraToast.makeText(this, message, Toast.LENGTH_LONG).show();
                 }
@@ -3492,7 +3522,13 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             @Override
             public void run() {
                 if (spinner != null) {
-                    spinner.setMessage(getResources().getString(R.string.conn_starting) + " " + stage);
+                    if (recoveryAttempt) {
+                        spinner.setMessage(getResources().getString(R.string.recovery_reconnecting,
+                                StreamRecovery.attempt(), StreamRecovery.MAX_ATTEMPTS));
+                    }
+                    else {
+                        spinner.setMessage(getResources().getString(R.string.conn_starting) + " " + stage);
+                    }
                 }
             }
         });
@@ -3563,6 +3599,13 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         if (hostMetrics != null) {
             hostMetrics.stop();
             hostMetrics = null;
+        }
+        if (wifiDiagnostics != null) {
+            wifiDiagnostics.stop();
+            wifiDiagnostics = null;
+        }
+        if (decoderRenderer != null) {
+            decoderRenderer.setStreamSampleListener(null);
         }
         if (connecting || connected) {
             if (connected) {
@@ -3644,6 +3687,16 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 finish();
             });
             return false;
+        }
+
+        if (recoveryAttempt && !recoveryRestarting && StreamRecovery.transientStartup(stage, portFlags, errorCode)) {
+            final long delayMs = StreamRecovery.nextDelay(getIntent().getStringExtra(EXTRA_PC_UUID), appId, -1);
+            if (delayMs >= 0) {
+                LimeLog.warning("Stream recovery: " + stage + " failed (error " + errorCode + ", ports " + portFlags + ")");
+                runOnUiThread(() -> scheduleRecovery(delayMs, errorCode));
+                return false;
+            }
+            LimeLog.warning("Stream recovery: out of attempts (" + StreamRecovery.describe() + ")");
         }
 
         // Perform a connection test if the failure could be due to a blocked port
@@ -3749,7 +3802,12 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 if (!displayedFailureDialog) {
                     displayedFailureDialog = true;
                     LimeLog.severe("Connection terminated: " + errorCode);
+                    boolean hadVideo = decoderRenderer != null && decoderRenderer.hasReceivedFrames();
                     stopConnection();
+
+                    if (tryRecovery(errorCode, portTestResult, hadVideo)) {
+                        return;
+                    }
 
                     // Display the error dialog if it was an unexpected termination.
                     // Otherwise, just finish the activity immediately.
@@ -3858,6 +3916,14 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 connected = true;
                 connecting = false;
                 updatePipAutoEnter();
+                connectedAtMs = SystemClock.elapsedRealtime();
+
+                if (recoveryAttempt) {
+                    LimeLog.info("Stream recovery: reconnected on attempt " + StreamRecovery.attempt());
+                    com.limelight.utils.PenumbraToast.makeText(Game.this, getResources().getString(R.string.recovery_done), Toast.LENGTH_SHORT).show();
+                }
+
+                startStreamDiagnostics();
 
                 if (prefConfig.enablePerfOverlay && prefConfig.perfOverlayHostMetrics && httpConn != null && hostMetrics == null) {
                     if (conn.getHostHardwareMetricsVersion() >= 1) {
@@ -4150,16 +4216,144 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         });
     }
 
-    // Lines the decoder doesn't know about: the host's hardware load
+    // Lines the decoder doesn't know about: the Wi-Fi link and the host's hardware load
     private String withStreamFacts(String text) {
         String separator = prefConfig.enablePerfOverlayLite ? "\t " : "\n";
         StringBuilder sb = new StringBuilder(text);
+        com.limelight.utils.WifiDiagnostics wifi = wifiDiagnostics;
+        if (wifi != null) {
+            String wifiText = com.limelight.utils.WifiDiagnostics.describe(this, wifi.latest(),
+                    lowLatencyWifiLock != null && lowLatencyWifiLock.isHeld(), stallRhythm.periodMs());
+            if (prefConfig.enablePerfOverlayLite) {
+                wifiText = wifiText.replace("\n", " · ");
+            }
+            appendLine(sb, separator, wifiText);
+        }
         com.limelight.utils.HostHardwareMetrics metrics = hostMetrics;
         String metricsLine = metrics != null ? metrics.latestLine() : null;
         if (metricsLine != null) {
             appendLine(sb, separator, metricsLine);
         }
         return sb.toString();
+    }
+
+    // Wi-Fi link facts for the overlay and the log, and a watch for stalls in a steady rhythm
+    private void startStreamDiagnostics() {
+        if (wifiDiagnostics == null) {
+            wifiDiagnostics = new com.limelight.utils.WifiDiagnostics(this);
+            wifiDiagnostics.start();
+        }
+        decoderRenderer.setStreamSampleListener((lossPercent, rttVarianceMs, fps) -> {
+            if (!stallRhythm.add(SystemClock.elapsedRealtime(), lossPercent, rttVarianceMs, fps)) {
+                return;
+            }
+            com.limelight.utils.WifiDiagnostics wifi = wifiDiagnostics;
+            com.limelight.utils.WifiFacts facts = wifi != null ? wifi.latest() : null;
+            final long periodMs = stallRhythm.periodMs();
+            LimeLog.warning(String.format(Locale.ROOT,
+                    "Network stalls repeat every %.1f s (%d stalls in the last 20 min, on %s); likely background Wi-Fi scans",
+                    periodMs / 1000.0, stallRhythm.stalls(), facts != null ? String.valueOf(facts.link) : "unknown link"));
+            if (facts != null && !facts.onWifi()) {
+                return;
+            }
+            runOnUiThread(() -> {
+                if (prefConfig.disableWarnings || isFinishing()) {
+                    return;
+                }
+                com.limelight.utils.PenumbraToast.makeText(Game.this, getResources().getString(R.string.stall_rhythm_notice,
+                        com.limelight.utils.WifiDiagnostics.period(Game.this, periodMs)), Toast.LENGTH_LONG).show();
+            });
+        });
+    }
+
+    // After a stream drops: reconnect to the same game if the failure looks transient
+    private boolean tryRecovery(int errorCode, int portTestResult, boolean hadVideo) {
+        if (!prefConfig.autoRecoverStream || probeMode || errorCode == MoonBridge.ML_ERROR_GRACEFUL_TERMINATION) {
+            return false;
+        }
+        if (!StreamRecovery.transientTermination(errorCode)) {
+            LimeLog.info("Stream recovery: error " + errorCode + " isn't transient; not reconnecting");
+            return false;
+        }
+        if (portTestResult != MoonBridge.ML_TEST_RESULT_INCONCLUSIVE && portTestResult != 0) {
+            LimeLog.info("Stream recovery: ports look blocked; not reconnecting");
+            return false;
+        }
+        if (connectedAtMs < 0 || !hadVideo) {
+            LimeLog.info("Stream recovery: video never started; not reconnecting");
+            return false;
+        }
+        long delayMs = StreamRecovery.nextDelay(getIntent().getStringExtra(EXTRA_PC_UUID), appId, connectedAtMs);
+        if (delayMs < 0) {
+            LimeLog.warning("Stream recovery: out of attempts (" + StreamRecovery.describe() + ")");
+            return false;
+        }
+        scheduleRecovery(delayMs, errorCode);
+        return true;
+    }
+
+    // Counts down to the next attempt, with a way out, then restarts this activity resume-only
+    private void scheduleRecovery(long delayMs, int errorCode) {
+        if (isFinishing() || recoveryDialog != null) {
+            return;
+        }
+        final int attempt = StreamRecovery.attempt();
+        LimeLog.warning(String.format(Locale.ROOT, "Stream recovery: attempt %d of %d in %d ms (error %d)",
+                attempt, StreamRecovery.MAX_ATTEMPTS, delayMs, errorCode));
+        if (spinner != null) {
+            spinner.dismiss();
+            spinner = null;
+        }
+        final long dueAt = SystemClock.uptimeMillis() + delayMs;
+        recoveryDialog = new AlertDialog.Builder(this)
+                .setTitle(R.string.recovery_title)
+                .setMessage(recoveryCountdown(dueAt, attempt))
+                .setCancelable(false)
+                .setNegativeButton(R.string.cancel, (dialog, which) -> cancelRecovery(true))
+                .show();
+        recoveryHandler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                long leftMs = dueAt - SystemClock.uptimeMillis();
+                if (recoveryDialog == null) {
+                    return;
+                }
+                if (leftMs <= 0) {
+                    restartForRecovery();
+                    return;
+                }
+                recoveryDialog.setMessage(recoveryCountdown(dueAt, attempt));
+                recoveryHandler.postDelayed(this, Math.min(1000, leftMs));
+            }
+        }, Math.min(1000, delayMs));
+    }
+
+    private String recoveryCountdown(long dueAt, int attempt) {
+        int seconds = (int) Math.max(1, Math.ceil((dueAt - SystemClock.uptimeMillis()) / 1000.0));
+        return getResources().getString(R.string.recovery_countdown, appName, seconds, attempt, StreamRecovery.MAX_ATTEMPTS);
+    }
+
+    private void cancelRecovery(boolean byUser) {
+        recoveryHandler.removeCallbacksAndMessages(null);
+        if (recoveryDialog != null) {
+            recoveryDialog.dismiss();
+            recoveryDialog = null;
+        }
+        StreamRecovery.reset();
+        LimeLog.info(byUser ? "Stream recovery: cancelled by the user" : "Stream recovery: cancelled, the stream was left");
+        finish();
+    }
+
+    private void restartForRecovery() {
+        recoveryHandler.removeCallbacksAndMessages(null);
+        if (recoveryDialog != null) {
+            recoveryDialog.dismiss();
+            recoveryDialog = null;
+        }
+        recoveryRestarting = true;
+        StreamRecovery.markPending(getIntent().getStringExtra(EXTRA_PC_UUID), appId);
+        // A fresh activity builds a fresh connection, decoder and surface; it resumes only
+        recreate();
     }
 
     private static void appendLine(StringBuilder sb, String separator, String line) {

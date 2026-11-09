@@ -32,6 +32,8 @@ public class StreamConfiguration {
     private int colorSpace;
     private boolean persistGamepadsAfterDisconnect;
     private boolean enableUltraLowLatency;
+    // A recovery attempt: only resume the app already running, never launch or quit one
+    private boolean resumeOnly;
 
     public static class Builder {
         private StreamConfiguration config = new StreamConfiguration();
@@ -147,6 +149,11 @@ public class StreamConfiguration {
             return this;
         }
 
+        public StreamConfiguration.Builder setResumeOnly(boolean resumeOnly) {
+            config.resumeOnly = resumeOnly;
+            return this;
+        }
+
         public StreamConfiguration build() {
             return config;
         }
@@ -172,6 +179,10 @@ public class StreamConfiguration {
         this.enableUltraLowLatency = false;
     }
     
+    public boolean getResumeOnly() {
+        return resumeOnly;
+    }
+
     public int getWidth() {
         return width;
     }

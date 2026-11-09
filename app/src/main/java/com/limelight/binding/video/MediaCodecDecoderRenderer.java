@@ -173,6 +173,17 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private VideoStats activeWindowVideoStats;
     private VideoStats lastWindowVideoStats;
     private VideoStats globalVideoStats;
+
+    /** One sample a second of the stream's health, for spotting periodic network stalls */
+    public interface StreamSampleListener {
+        /**
+         * @param lossPercent frames lost in the last second, or negative if none were due
+         * @param rttVarianceMs round-trip time variation, or negative if unknown
+         * @param fps the stream's frame rate
+         */
+        void onStreamSample(float lossPercent, float rttVarianceMs, float fps);
+    }
+    private volatile StreamSampleListener streamSampleListener;
     private volatile long probeLastFlipUptime;
 
     private long lastTimestampUs;
@@ -1819,6 +1830,13 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         // Flip stats windows roughly every second
         if (SystemClock.uptimeMillis() >= activeWindowVideoStats.measurementStartTimestamp + 1000) {
+            StreamSampleListener sampleListener = streamSampleListener;
+            if (sampleListener != null) {
+                float lossPercent = activeWindowVideoStats.totalFrames > 0 ?
+                        100f * activeWindowVideoStats.framesLost / activeWindowVideoStats.totalFrames : -1;
+                long sampleRtt = MoonBridge.getEstimatedRttInfo();
+                sampleListener.onStreamSample(lossPercent, sampleRtt >= 0 ? (int) sampleRtt : -1, prefs.fps);
+            }
             if (prefs.enablePerfOverlay || prefs.enablePerfLogging) {
                 VideoStats lastTwo = new VideoStats();
                 lastTwo.add(lastWindowVideoStats);
@@ -2433,6 +2451,15 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
 
         return capabilities;
+    }
+
+    public void setStreamSampleListener(StreamSampleListener listener) {
+        streamSampleListener = listener;
+    }
+
+    /** Whether any video frame arrived on this stream */
+    public boolean hasReceivedFrames() {
+        return globalVideoStats.totalFramesReceived > 0 || activeWindowVideoStats.totalFramesReceived > 0;
     }
 
     public int getAverageEndToEndLatency() {

@@ -547,6 +547,12 @@
             android:summary="@string/summary_checkbox_host_audio"
             android:title="@string/title_checkbox_host_audio"
             app:iconSpaceReserved="false" />
+        <CheckBoxPreference
+            android:defaultValue="true"
+            android:key="checkbox_auto_recover_stream"
+            android:summary="@string/summary_checkbox_auto_recover_stream"
+            android:title="@string/title_checkbox_auto_recover_stream"
+            app:iconSpaceReserved="false" />
     </PreferenceCategory>
 
     <PreferenceCategory
