@@ -56,6 +56,10 @@ struct NdkApi {
     void (*APerformanceHint_closeSession)(APerformanceHintSession* session);
     // Optional (API 34)
     int (*APerformanceHint_setThreads)(APerformanceHintSession* session, const pid_t* threadIds, size_t size);
+
+    // Optional (API 28): tags the buffers queued to a window with a dataspace (ADataSpace), which
+    // is how HDR10 reaches the compositor when the Vulkan surface offers no HDR10 color space
+    int32_t (*ANativeWindow_setBuffersDataSpace)(ANativeWindow* window, int32_t dataSpace);
 };
 
 // Loads the functions above. Returns nullptr if a required one is missing.

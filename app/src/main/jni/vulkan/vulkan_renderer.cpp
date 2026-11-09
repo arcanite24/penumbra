@@ -2601,11 +2601,23 @@ bool VulkanRenderer::createSwapchain() {
         // The stream is already PQ-encoded BT.2020, so it passes straight through
         found = pq = findFormat(VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_HDR10_ST2084_EXT, &chosen);
         if (!found) {
-            ALOGW("Surface has no HDR10 format; tone mapping HDR to SDR");
             for (const auto& f : formats) {
                 ALOGI("Surface format %d, color space %d", f.format, f.colorSpace);
             }
         }
+    }
+    // Some drivers (Adreno on Android 13, as on the Odin 2) don't list HDR10 as a Vulkan color
+    // space even though the display and compositor take BT.2020 PQ buffers, as MediaCodec sends
+    // them. Then the PQ signal passes through a 10-bit swapchain untouched, and the window's
+    // buffers are tagged BT.2020 PQ once the swapchain exists (tagWindowPq below).
+    bool tagWindowPq = false;
+    if (!found && hdrActive_ && ndk_ && ndk_->ANativeWindow_setBuffersDataSpace &&
+            findFormat(VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR, &chosen)) {
+        found = pq = tagWindowPq = true;
+        ALOGI("Surface has no HDR10 color space; passing HDR10 through with a BT.2020 PQ dataspace");
+    }
+    else if (!found && hdrActive_) {
+        ALOGW("Surface has no HDR10 format; tone mapping HDR to SDR");
     }
     if (!found && (config_.tenBit || hdrActive_)) {
         found = findFormat(VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR, &chosen);
@@ -2689,6 +2701,14 @@ bool VulkanRenderer::createSwapchain() {
     }
     swapchain_ = swapchain;
     surfaceFormat_ = chosen;
+    if (tagWindowPq) {
+        // ADATASPACE_BT2020_PQ: BT.2020 primaries, SMPTE 2084 transfer, full range
+        constexpr int32_t kDataSpaceBt2020Pq = 163971072;
+        const int32_t err = ndk_->ANativeWindow_setBuffersDataSpace(outputWindow_, kDataSpaceBt2020Pq);
+        if (err != 0) {
+            ALOGW("Couldn't tag the window BT.2020 PQ (%d); the picture will look washed out", err);
+        }
+    }
     presentMode_ = presentMode;
     extent_ = extent;
     preTransform_ = transform;

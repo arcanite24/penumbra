@@ -351,7 +351,18 @@
     <string name="videoformat_av1always">Prefer AV1 (Experimental)</string>
     <string name="videoformat_hevcalways">Prefer HEVC</string>
     <string name="videoformat_h264always">Prefer H.264</string>
-    <string name="videoformat_pyrowave">PyroWave (fast wired or Wi-Fi 6 LAN, experimental)</string>
+    <string name="videoformat_pyrowave">PyroWave (fast wired or Wi-Fi 6 LAN)</string>
+    <string name="category_pyrowave_settings">PyroWave</string>
+    <string name="summary_pyrowave_info">PyroWave is a GPU wavelet codec for fast local networks: every frame stands alone, so lost packets never freeze the picture. Choose it under Video codec. It needs a host that offers it (Vibepollo does), 64-bit Android 10+ with Vulkan 1.1, and a lot of bandwidth: about 220 Mbps for 1080p60 and 440 Mbps for 1080p120.</string>
+    <string name="title_pyrowave_late_frames">Late frames</string>
+    <string name="summary_pyrowave_late_frames">What to do with a frame still arriving when it should be shown. Showing it with its finest detail missing keeps motion smooth; waiting for it keeps every frame sharp.</string>
+    <string name="pyrowave_late_frames_off">Wait for the whole frame</string>
+    <string name="pyrowave_late_frames_balanced">Balanced</string>
+    <string name="pyrowave_late_frames_smooth">Smoothest (show it on time)</string>
+    <string name="title_pyrowave_front_buffer">Front buffer rendering</string>
+    <string name="summary_pyrowave_front_buffer">Draw each frame straight into the buffer the screen is reading, for the lowest latency. Can tear on some devices.</string>
+    <string name="title_pyrowave_gpu_boost">Keep the GPU clock up</string>
+    <string name="summary_pyrowave_gpu_boost">Keep the GPU lightly busy between frames so decoding never waits for it to clock up. Uses more battery.</string>
 
     <string name="title_frame_pacing">Video frame pacing</string>
     <string name="summary_frame_pacing">Specify how to balance video latency and smoothness</string>

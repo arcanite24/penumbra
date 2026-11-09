@@ -113,6 +113,16 @@
         <item>@string/videoformat_h264always</item>
         <item>@string/videoformat_pyrowave</item>
     </string-array>
+    <string-array name="pyrowave_late_frames_names">
+        <item>@string/pyrowave_late_frames_off</item>
+        <item>@string/pyrowave_late_frames_balanced</item>
+        <item>@string/pyrowave_late_frames_smooth</item>
+    </string-array>
+    <string-array name="pyrowave_late_frames_values" translatable="false">
+        <item>off</item>
+        <item>balanced</item>
+        <item>smooth</item>
+    </string-array>
     <string-array name="video_format_values" translatable="false">
         <item>auto</item>
         <item>forceav1</item>

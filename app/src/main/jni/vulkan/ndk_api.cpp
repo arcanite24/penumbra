@@ -72,6 +72,8 @@ namespace {
         }
         loadSymbol("APerformanceHint_setThreads", api.APerformanceHint_setThreads, false);
 
+        loadSymbol("ANativeWindow_setBuffersDataSpace", api.ANativeWindow_setBuffersDataSpace, false);
+
         // The libraries stay loaded for the life of the process
         apiLoaded = ok;
     }

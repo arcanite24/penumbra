@@ -565,11 +565,13 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         } catch (Exception ignored) {}
 
         boolean tenBit = (videoFormat & MoonBridge.VIDEO_FORMAT_PYROWAVE_10BIT) != 0;
+        // The renderer's jitter buffer: low latency (0) with the lowest-latency pacing, else balanced (1)
+        int jitterBuffer = prefs.framePacing == PreferenceConfiguration.FRAME_PACING_MIN_LATENCY ? 0 : 1;
         vulkanRenderer = VulkanRendererBridge.create(renderTarget, width, height, targetFps,
-                prefs.framePacing, 1 /* JITTER_BUFFER_BALANCED */, 0 /* no dithering */,
+                prefs.framePacing, jitterBuffer, 0 /* no dithering */,
                 getPreferredColorSpace(), true /* PyroWave is always full range */, tenBit,
-                true, centerChroma, 1 /* PYROWAVE_LATE_FRAMES_BALANCED */, displayRefreshHz,
-                "pyrowave", null, null, false, false);
+                true, centerChroma, prefs.pyrowaveLateFrames, displayRefreshHz,
+                "pyrowave", null, null, prefs.pyrowaveFrontBuffer, prefs.pyrowaveGpuBoost);
         if (vulkanRenderer == null) {
             LimeLog.severe("PyroWave decoding failed to start");
             return -1;

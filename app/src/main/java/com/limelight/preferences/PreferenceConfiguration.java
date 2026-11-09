@@ -371,6 +371,13 @@ public class PreferenceConfiguration {
     public boolean touchscreenTrackpad;
     public MoonBridge.AudioConfiguration audioConfiguration;
     public int framePacing;
+    // PyroWave renderer options (PEN-9); late frames is one of PYROWAVE_LATE_FRAMES_*
+    public static final int PYROWAVE_LATE_FRAMES_OFF = 0;
+    public static final int PYROWAVE_LATE_FRAMES_BALANCED = 1;
+    public static final int PYROWAVE_LATE_FRAMES_SMOOTH = 2;
+    public int pyrowaveLateFrames = PYROWAVE_LATE_FRAMES_BALANCED;
+    public boolean pyrowaveFrontBuffer;
+    public boolean pyrowaveGpuBoost;
     public boolean absoluteMouseMode;
     public boolean enableAudioFx;
     public boolean reduceRefreshRate;
@@ -865,6 +872,13 @@ private static int getFramePacingValue(Context context) {
 
         config.videoFormat = getVideoFormatValue(context);
         config.framePacing = getFramePacingValue(context);
+        {
+            String lateFrames = prefs.getString("pyrowave_late_frames", "balanced");
+            config.pyrowaveLateFrames = "off".equals(lateFrames) ? PYROWAVE_LATE_FRAMES_OFF :
+                    "smooth".equals(lateFrames) ? PYROWAVE_LATE_FRAMES_SMOOTH : PYROWAVE_LATE_FRAMES_BALANCED;
+            config.pyrowaveFrontBuffer = prefs.getBoolean("checkbox_pyrowave_front_buffer", false);
+            config.pyrowaveGpuBoost = prefs.getBoolean("checkbox_pyrowave_gpu_boost", false);
+        }
         config.preferLowerDelays = getPreferLowerDelays(context);
 
 

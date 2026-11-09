@@ -44,6 +44,8 @@ public class WizardReport {
     public boolean av1Main10;
     public String avcDecoder;
     public int hevcMaxFps1080;
+    /** The device can decode PyroWave (64-bit, Android 10+, Vulkan 1.1; PEN-9). */
+    public boolean pyrowaveDecoder;
 
     // Network link
     public static final int LINK_NONE = 0;
@@ -91,6 +93,28 @@ public class WizardReport {
     public static final long SCM_HEVC_MAIN10 = 0x00000200;
     public static final long SCM_AV1_MAIN8 = 0x00010000;
     public static final long SCM_AV1_MAIN10 = 0x00020000;
+    // Vibepollo's PyroWave bits (docs/pyrowave-protocol.md)
+    public static final long SCM_PYROWAVE = 0x00800000;
+    public static final long SCM_PYROWAVE_10BIT = 0x02000000;
+
+    public boolean hostPyrowave() {
+        return (hostCodecModes & SCM_PYROWAVE) != 0;
+    }
+
+    public boolean hostPyrowave10() {
+        return (hostCodecModes & SCM_PYROWAVE_10BIT) != 0;
+    }
+
+    /**
+     * Megabits per second the link to the host can carry for a PyroWave stream, or 0 when it's too
+     * slow or unknown. Ethernet links are assumed to be gigabit.
+     */
+    public int pyrowaveLinkMbps() {
+        if (!hostOnLan || place == PLACE_REMOTE) return 0;
+        if (link == LINK_ETHERNET) return 1000;
+        if (link == LINK_WIFI && wifiFreqMhz >= 4900 && wifiLinkMbps >= 600 && wifiRssi >= -62) return wifiLinkMbps;
+        return 0;
+    }
 
     public boolean hostHevc() {
         // Old GFE builds don't report modes but always support HEVC

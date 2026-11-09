@@ -25,6 +25,11 @@ public final class WizardRecommender {
     public static final String KEY_ULL = "checkbox_ultra_low_latency";
     public static final String KEY_REDUCE_REFRESH = "checkbox_reduce_refresh_rate";
 
+    /** The bitrate slider's top; PyroWave streams can go this high. */
+    static final int MAX_KBPS = 1000000;
+    /** Past this H.264, HEVC and AV1 gain nothing a handheld can see. */
+    static final int MAX_CLASSIC_KBPS = 150000;
+
     private static final int[][] RESOLUTIONS = {
             {3840, 2160}, {2560, 1440}, {1920, 1080}, {1280, 720}, {854, 480}};
 
@@ -34,6 +39,8 @@ public final class WizardRecommender {
         public int fps;
         public int bitrateKbps;
         public String codec;
+        /** The codec to use if PyroWave doesn't hold up in the trials. */
+        public String fallbackCodec;
         public boolean hdr;
         public String pacing;
         public boolean virtualDisplay;
@@ -125,7 +132,22 @@ public final class WizardRecommender {
 
         // Codec
         boolean hevc = r.hevcDecoder != null && r.hostHevc();
-        if (hevc) {
+        // PyroWave needs about 220 Mbps at 1080p60; use it only when the link has room for that
+        int pwLink = r.pyrowaveLinkMbps();
+        boolean pyrowave = r.pyrowaveDecoder && r.hostPyrowave() && pwLink > 0
+                && pyrowaveKbps(p.width, p.height, p.fps, false) <= pwLink * 1000 * 0.65
+                && r.power != WizardReport.POWER_BATTERY;
+        String classic;
+        if (hevc) classic = "forceh265";
+        else if (r.av1Decoder != null && r.hostAv1()) classic = "forceav1";
+        else classic = "neverh265";
+        p.fallbackCodec = classic;
+        if (pyrowave) {
+            p.codec = "forcepyrowave";
+            p.reasons.put(KEY_CODEC, "PyroWave on both ends and a " + (r.link == WizardReport.LINK_ETHERNET
+                    ? "wired" : pwLink + " Mbps Wi-Fi") + " link: every frame stands alone, so a lost packet "
+                    + "never freezes the picture, and it decodes in a few ms on the GPU.");
+        } else if (hevc) {
             p.codec = "forceh265";
             p.reasons.put(KEY_CODEC, "Hardware HEVC on both ends: same quality as H.264 at about 40% less bitrate"
                     + (r.av1Decoder != null && r.hostAv1() ? ". AV1 also works but usually decodes slower on handhelds." : "."));
@@ -138,7 +160,8 @@ public final class WizardRecommender {
         }
 
         // HDR
-        boolean hdrPossible = r.hdrDisplay && r.hevcMain10 && r.hostHevc10() && hevc;
+        boolean hdrPossible = pyrowave ? r.hdrDisplay && r.hostPyrowave10()
+                : r.hdrDisplay && r.hevcMain10 && r.hostHevc10() && hevc;
         p.hdr = r.wantHdr && hdrPossible;
         if (p.hdr) {
             p.reasons.put(KEY_HDR, "Your screen, decoder and host all handle 10-bit HDR.");
@@ -146,7 +169,7 @@ public final class WizardRecommender {
             p.reasons.put(KEY_HDR, "You asked to keep SDR.");
         } else if (!r.hdrDisplay) {
             p.reasons.put(KEY_HDR, "This screen doesn't report HDR10.");
-        } else if (!r.hevcMain10) {
+        } else if (!pyrowave && !r.hevcMain10) {
             p.reasons.put(KEY_HDR, "The decoder can't do 10-bit HEVC.");
         } else {
             p.reasons.put(KEY_HDR, "The host doesn't offer 10-bit encoding.");
@@ -210,7 +233,27 @@ public final class WizardRecommender {
         return false;
     }
 
+    /** PyroWave's bitrate scales with pixels per second: about 220 Mbps at 1080p60. */
+    static double pyrowaveKbps(int width, int height, int fps, boolean hdr) {
+        return 220000.0 * width * height / (1920.0 * 1080.0) * fps / 60.0 * (hdr ? 1.2 : 1.0);
+    }
+
     static int estimateBitrate(WizardReport r, Plan p) {
+        if ("forcepyrowave".equals(p.codec)) {
+            double kbps = pyrowaveKbps(p.width, p.height, p.fps, p.hdr);
+            if (r.priority == WizardReport.PRIORITY_IMAGE) kbps *= 1.2;
+            int linkMbps = r.pyrowaveLinkMbps();
+            double cap = linkMbps * 1000 * 0.65;
+            String why = String.format(Locale.US, "PyroWave sized for %d×%d at %d fps%s", p.width, p.height, p.fps,
+                    p.hdr ? " in HDR" : "");
+            if (kbps > cap) {
+                kbps = cap;
+                why += ", capped at two thirds of your " + (r.link == WizardReport.LINK_ETHERNET ? "gigabit" : linkMbps + " Mbps")
+                        + " link";
+            }
+            p.reasons.put(KEY_BITRATE, why + ".");
+            return (int) Math.max(50000, Math.min(MAX_KBPS, Math.round(kbps / 1000.0) * 1000));
+        }
         double pixels = (double) p.width * p.height / (1920.0 * 1080.0);
         double kbps = 20000 * pixels * Math.pow(p.fps / 60.0, 0.6);
         StringBuilder why = new StringBuilder(String.format(Locale.US, "Sized for %d×%d at %d fps",
@@ -247,7 +290,7 @@ public final class WizardRecommender {
             kbps = cap;
             why.append(", capped at ").append(capWhy);
         }
-        int result = (int) Math.max(5000, Math.min(150000, Math.round(kbps / 1000.0) * 1000));
+        int result = (int) Math.max(5000, Math.min(MAX_CLASSIC_KBPS, Math.round(kbps / 1000.0) * 1000));
         why.append('.');
         p.reasons.put(KEY_BITRATE, why.toString());
         return result;
@@ -258,8 +301,11 @@ public final class WizardRecommender {
     public static List<WizardReport.Trial> buildTrials(Plan p) {
         List<WizardReport.Trial> trials = new ArrayList<>();
         int b = p.bitrateKbps;
-        int low = Math.max(5000, Math.round(b * 0.6f / 1000f) * 1000);
-        int high = Math.min(150000, Math.round(b * 1.6f / 1000f) * 1000);
+        boolean pw = "forcepyrowave".equals(p.codec);
+        // PyroWave's quality falls off fast below its target, and its bitrate is already near the
+        // link's limit, so its ladder is narrow
+        int low = Math.max(5000, Math.round(b * (pw ? 0.75f : 0.6f) / 1000f) * 1000);
+        int high = Math.min(pw ? MAX_KBPS : MAX_CLASSIC_KBPS, Math.round(b * (pw ? 1.25f : 1.6f) / 1000f) * 1000);
         trials.add(new WizardReport.Trial("Bitrate " + WizardProbes.mbps(low), p.width, p.height, p.fps, low, "latency", p.codec, p.hdr));
         trials.add(new WizardReport.Trial("Bitrate " + WizardProbes.mbps(b), p.width, p.height, p.fps, b, "latency", p.codec, p.hdr));
         trials.add(new WizardReport.Trial("Bitrate " + WizardProbes.mbps(high), p.width, p.height, p.fps, high, "latency", p.codec, p.hdr));
@@ -291,7 +337,9 @@ public final class WizardRecommender {
         if (!anyDone) {
             return null;
         }
-        int b = Math.max(5000, Math.round(p.bitrateKbps * 0.7f / 1000f) * 1000);
+        // PyroWave's bitrate scales with the frame rate; the others' barely does
+        float scale = "forcepyrowave".equals(p.codec) ? 60f / p.fps : 0.7f;
+        int b = Math.max(5000, Math.round(p.bitrateKbps * scale / 1000f) * 1000);
         return new WizardReport.Trial("60 fps fallback", p.width, p.height, 60, b, "latency", p.codec, p.hdr);
     }
 
@@ -312,6 +360,26 @@ public final class WizardRecommender {
 
     /** Folds trial measurements back into the plan. */
     public static void refine(Plan p, WizardReport r) {
+        if ("forcepyrowave".equals(p.codec) && !pyrowaveHeld(r)) {
+            // PyroWave didn't run, or lost frames at every bitrate and frame rate: the classic codec
+            // copes with a lossy link far better
+            WizardReport.Trial seen = null;
+            for (WizardReport.Trial t : r.trials) {
+                if (t.done && !t.failed && "forcepyrowave".equals(t.codec)) seen = t;
+            }
+            boolean ran = seen != null && seen.decoder != null && seen.decoder.startsWith("PyroWave");
+            p.codec = p.fallbackCodec;
+            p.reasons.put(KEY_CODEC, ran
+                    ? String.format(Locale.US, "PyroWave lost frames on this link (%.1f%% at %s), so this uses %s, which copes better.",
+                            seen.lossPct, WizardProbes.mbps(seen.bitrateKbps), codecName(p.codec))
+                    : "The host didn't start a PyroWave stream, so this uses " + codecName(p.codec) + ".");
+            if (p.hdr && !(r.hevcMain10 && r.hostHevc10() && "forceh265".equals(p.codec))) {
+                p.hdr = false;
+                p.reasons.put(KEY_HDR, "HDR needs 10-bit HEVC, which this device or host lacks.");
+            }
+            p.bitrateKbps = estimateBitrate(r, p);
+            return;
+        }
         List<WizardReport.Trial> ladder = new ArrayList<>();
         WizardReport.Trial pacingTrial = null;
         WizardReport.Trial fallback = null;
@@ -351,6 +419,13 @@ public final class WizardRecommender {
                         " Test streams arrived clean (%.0f of %d fps, %.1f%% lost), but the test scene was calm and "
                                 + "used at most %.1f Mbps, so this keeps the estimate instead of the highest test.",
                         best.receivedFps, best.fps, best.lossPct, maxCarried));
+            } else if (best != null && "forcepyrowave".equals(p.codec) && best.bitrateKbps > p.bitrateKbps
+                    && r.priority != WizardReport.PRIORITY_IMAGE) {
+                // A short clean test above the estimate leaves too little headroom for a whole session,
+                // above all on Wi-Fi, so PyroWave keeps its estimate unless sharpness comes first
+                p.reasons.put(KEY_BITRATE, String.format(Locale.US,
+                        "%s Tested clean up to %s (%.0f of %d fps, %.1f%% lost); this keeps headroom for the rest of the link.",
+                        p.reasons.get(KEY_BITRATE), WizardProbes.mbps(best.bitrateKbps), best.receivedFps, best.fps, best.lossPct));
             } else if (best != null) {
                 p.bitrateKbps = best.bitrateKbps;
                 p.reasons.put(KEY_BITRATE, String.format(Locale.US,
@@ -392,11 +467,13 @@ public final class WizardRecommender {
             for (WizardReport.Trial t : ladder) {
                 if (t.bitrateKbps == pacingTrial.bitrateKbps) reference = t;
             }
+            // Received frame rates vary with how much the host's screen changes, so only compare how
+            // many of the received frames each mode showed
             if (reference != null && !pacingTrial.renderClean() && reference.renderClean()) {
                 String chosen = pacingName(p.pacing);
                 p.pacing = "latency";
                 p.reasons.put(KEY_PACING, String.format(Locale.US,
-                        "%s showed %.0f of %.0f received fps; lowest latency showed %.0f of %.0f, so it's smoother here too.",
+                        "%s showed %.0f of %.0f received fps; lowest latency showed %.0f of %.0f, so it's smoother here.",
                         chosen, pacingTrial.renderedFps, pacingTrial.receivedFps,
                         reference.renderedFps, reference.receivedFps));
             } else if (pacingTrial.renderClean()) {
@@ -437,8 +514,19 @@ public final class WizardRecommender {
         return b ? "On" : "Off";
     }
 
+    /** A PyroWave trial ran on the PyroWave decoder and arrived clean. */
+    private static boolean pyrowaveHeld(WizardReport r) {
+        for (WizardReport.Trial t : r.trials) {
+            if ("forcepyrowave".equals(t.codec) && t.networkClean() && t.decoder != null && t.decoder.startsWith("PyroWave")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     static String codecName(String v) {
         switch (v) {
+            case "forcepyrowave": return "PyroWave";
             case "forceh265": return "HEVC";
             case "forceav1": return "AV1";
             case "neverh265": return "H.264";

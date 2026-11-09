@@ -181,6 +181,11 @@ public final class WizardProbes {
         if (avc != null) {
             r.avcDecoder = avc.getName();
         }
+
+        r.pyrowaveDecoder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+                && com.limelight.binding.video.VulkanRendererBridge.isPyrowaveSupported();
+        facts.add(new Fact("PyroWave decoder", r.pyrowaveDecoder ? "Vulkan" : "Not supported",
+                r.pyrowaveDecoder ? null : "Needs 64-bit Android 10+ with Vulkan 1.1", r.pyrowaveDecoder ? GOOD : INFO));
     }
 
     /** The hardware decoder the stream would use: low-latency variants first, software never. */
@@ -338,7 +343,9 @@ public final class WizardProbes {
                         r.wifiRssi >= -60 ? GOOD : r.wifiRssi >= -70 ? OK : WARN));
                 if (r.wifiLinkMbps > 0) {
                     facts.add(new Fact("Link speed", r.wifiLinkMbps + " Mbps",
-                            "Usable streaming bitrate is about a third of this",
+                            r.pyrowaveDecoder && r.wifiLinkMbps >= 600
+                                    ? "About a third of this suits HEVC; PyroWave can use about two thirds"
+                                    : "Usable streaming bitrate is about a third of this",
                             r.wifiLinkMbps >= 400 ? GOOD : r.wifiLinkMbps >= 150 ? OK : WARN));
                 }
                 break;
@@ -381,6 +388,7 @@ public final class WizardProbes {
             if ((r.hostCodecModes & WizardReport.SCM_H264) != 0) codecs.add("H.264");
             if (r.hostHevc()) codecs.add(r.hostHevc10() ? "HEVC 10-bit" : "HEVC");
             if (r.hostAv1()) codecs.add((r.hostCodecModes & WizardReport.SCM_AV1_MAIN10) != 0 ? "AV1 10-bit" : "AV1");
+            if (r.hostPyrowave()) codecs.add(r.hostPyrowave10() ? "PyroWave 10-bit" : "PyroWave");
             facts.add(new Fact("Host encoders", android.text.TextUtils.join(" · ", codecs), null,
                     r.hostHevc() ? GOOD : WARN));
 
