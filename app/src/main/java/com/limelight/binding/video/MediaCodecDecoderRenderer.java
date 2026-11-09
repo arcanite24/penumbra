@@ -551,6 +551,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         return prefs.videoFormat == PreferenceConfiguration.FormatOption.FORCE_PYROWAVE && isPyrowaveSupported();
     }
 
+    /** The Vulkan renderer's PacingMode::HostTimed (frame_pacer.h); no frame pacing setting maps to it. */
+    private static final int PYROWAVE_PACING_HOST_TIMED = 4;
+
     private int setupPyrowave(int width, int height) {
         pyrowave = true;
 
@@ -567,8 +570,12 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         boolean tenBit = (videoFormat & MoonBridge.VIDEO_FORMAT_PYROWAVE_10BIT) != 0;
         // The renderer's jitter buffer: low latency (0) with the lowest-latency pacing, else balanced (1)
         int jitterBuffer = prefs.framePacing == PreferenceConfiguration.FRAME_PACING_MIN_LATENCY ? 0 : 1;
+        // The renderer only draws into a front buffer when it places frames itself: host-timed
+        // pacing puts each frame on a scan from the host's frame times, with the jitter buffer
+        // absorbing network jitter, so a front buffer always uses it
+        int pacing = prefs.pyrowaveFrontBuffer ? PYROWAVE_PACING_HOST_TIMED : prefs.framePacing;
         vulkanRenderer = VulkanRendererBridge.create(renderTarget, width, height, targetFps,
-                prefs.framePacing, jitterBuffer, 0 /* no dithering */,
+                pacing, jitterBuffer, 0 /* no dithering */,
                 getPreferredColorSpace(), true /* PyroWave is always full range */, tenBit,
                 true, centerChroma, prefs.pyrowaveLateFrames, displayRefreshHz,
                 "pyrowave", null, null, prefs.pyrowaveFrontBuffer, prefs.pyrowaveGpuBoost);

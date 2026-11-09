@@ -360,7 +360,7 @@
     <string name="pyrowave_late_frames_balanced">Balanced</string>
     <string name="pyrowave_late_frames_smooth">Smoothest (show it on time)</string>
     <string name="title_pyrowave_front_buffer">Front buffer rendering</string>
-    <string name="summary_pyrowave_front_buffer">Draw each frame straight into the buffer the screen is reading, for the lowest latency. Can tear on some devices.</string>
+    <string name="summary_pyrowave_front_buffer">Draw each frame straight into the buffer the screen is reading, timed to each scan of the screen from the host frame times, for the lowest latency. Replaces Frame pacing for PyroWave streams; Lowest latency there keeps the smallest buffer.</string>
     <string name="title_pyrowave_gpu_boost">Keep the GPU clock up</string>
     <string name="summary_pyrowave_gpu_boost">Keep the GPU lightly busy between frames so decoding never waits for it to clock up. Uses more battery.</string>
 
