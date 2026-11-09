@@ -105,12 +105,44 @@ public class WizardReport {
         return (hostCodecModes & SCM_PYROWAVE_10BIT) != 0;
     }
 
+    // Vibepollo's UDP burst calibration (PEN-10), advertised in paired serverinfo
+    public int hostUdpProbeVersion;
+    public boolean hostUdpHandshake;
+    public boolean hostUdpBurst;
+    /** The host's routed wired link, Mbps; 0 when wireless, virtual or unknown. */
+    public int hostLinkMbps;
+    /** The UDP probe ran to the end (passed or not). */
+    public boolean udpProbeRan;
+    /** Highest rate that passed the UDP probe twice, kbps; 0 when none did. */
+    public int udpCapacityKbps;
+    /** Highest frame pace that passed, kbps; 0 when not measured (the host keeps its default). */
+    public int udpPaceKbps;
+    /** Why the probe gave no rate, or the last result's detail. */
+    public String udpNote;
+
+    /** The UDP probe measured a rate: it replaces the link-speed guess. */
+    public boolean udpMeasured() {
+        return udpProbeRan && udpCapacityKbps > 0;
+    }
+
+    /**
+     * The most a PyroWave stream should use, kbps: 90% of the measured UDP capacity when the probe
+     * ran, otherwise two thirds of the link speed. 0 when PyroWave shouldn't be used.
+     */
+    public int pyrowaveBudgetKbps() {
+        if (udpProbeRan) {
+            return (int) (udpCapacityKbps * 0.9);
+        }
+        return (int) (pyrowaveLinkMbps() * 1000 * 0.65);
+    }
+
     /**
      * Megabits per second the link to the host can carry for a PyroWave stream, or 0 when it's too
-     * slow or unknown. Ethernet links are assumed to be gigabit.
+     * slow or unknown. Ethernet links are assumed to be gigabit. A UDP probe result wins.
      */
     public int pyrowaveLinkMbps() {
         if (!hostOnLan || place == PLACE_REMOTE) return 0;
+        if (udpProbeRan) return udpCapacityKbps / 1000;
         if (link == LINK_ETHERNET) return 1000;
         if (link == LINK_WIFI && wifiFreqMhz >= 4900 && wifiLinkMbps >= 600 && wifiRssi >= -62) return wifiLinkMbps;
         return 0;

@@ -893,6 +893,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 .setAudioConfiguration(prefConfig.audioConfiguration)
                 .setColorSpace(decoderRenderer.getPreferredColorSpace())
                 .setColorRange(decoderRenderer.getPreferredColorRange())
+                .setPyrowavePaceMbps(prefConfig.pyrowavePaceMbps)
                 .setPersistGamepadsAfterDisconnect(!prefConfig.multiController)
                 .build();
 

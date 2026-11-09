@@ -380,6 +380,8 @@ public class PreferenceConfiguration {
     public int pyrowaveLateFrames = PYROWAVE_LATE_FRAMES_BALANCED;
     public boolean pyrowaveFrontBuffer;
     public boolean pyrowaveGpuBoost;
+    /** Frame pace for PyroWave streams from the Tune wizard's UDP test, Mbps; 0: the host's default (PEN-10). */
+    public int pyrowavePaceMbps;
     public boolean absoluteMouseMode;
     public boolean enableAudioFx;
     public boolean reduceRefreshRate;
@@ -880,6 +882,7 @@ private static int getFramePacingValue(Context context) {
                     "smooth".equals(lateFrames) ? PYROWAVE_LATE_FRAMES_SMOOTH : PYROWAVE_LATE_FRAMES_BALANCED;
             config.pyrowaveFrontBuffer = prefs.getBoolean("checkbox_pyrowave_front_buffer", false);
             config.pyrowaveGpuBoost = prefs.getBoolean("checkbox_pyrowave_gpu_boost", false);
+            config.pyrowavePaceMbps = Math.max(0, prefs.getInt("pyrowave_pace_mbps", 0));
         }
         config.preferLowerDelays = getPreferLowerDelays(context);
 

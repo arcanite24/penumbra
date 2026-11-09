@@ -107,6 +107,18 @@
             android:summary="@string/summary_pyrowave_gpu_boost"
             android:title="@string/title_pyrowave_gpu_boost"
             app:iconSpaceReserved="false" />
+        <com.limelight.preferences.SeekBarPreference
+            android:defaultValue="0"
+            android:dialogMessage="@string/summary_pyrowave_pace"
+            android:key="pyrowave_pace_mbps"
+            android:max="3000"
+            android:summary="@string/summary_pyrowave_pace"
+            android:text="@string/suffix_pyrowave_pace"
+            android:title="@string/title_pyrowave_pace"
+            app:iconSpaceReserved="false"
+            seekbar:keyStep="50"
+            seekbar:min="0"
+            seekbar:step="50" />
     </PreferenceCategory>
 
     <PreferenceCategory

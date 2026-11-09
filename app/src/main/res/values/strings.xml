@@ -835,5 +835,8 @@
     <string name="bitrate_failed">Couldn\'t change the bitrate: %1$s</string>
     <string name="title_auto_bitrate">Automatic bitrate</string>
     <string name="summary_auto_bitrate">Lowers the bitrate when frames get lost and raises it again after a clean minute, never above the bitrate set here. Needs a host that changes the bitrate live (Vibepollo), and stays off if the host adapts the bitrate itself. The limit is remembered for each network.</string>
+    <string name="title_pyrowave_pace">PyroWave frame pace</string>
+    <string name="summary_pyrowave_pace">How fast the host sends each frame\'s packets. The Tune wizard measures it with the host\'s UDP burst test; 0 leaves it to the host.</string>
+    <string name="suffix_pyrowave_pace">Mbps</string>
     <string name="bitrate_auto_down">Network busy: bitrate lowered to %1$s</string>
 </resources>

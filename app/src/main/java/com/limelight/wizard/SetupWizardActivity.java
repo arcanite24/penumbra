@@ -376,8 +376,23 @@ public class SetupWizardActivity extends AppCompatActivity {
                         setBusy(true, ms < 0 ? String.format("Sample %d of %d · no reply", i + 1, total)
                                 : String.format("Sample %d of %d · %.1f ms", i + 1, total, ms));
                     }));
+            if (!WizardProbes.canProbeUdp(report) || binder == null) {
+                post(() -> {
+                    for (WizardProbes.Fact f : facts) addFact(f);
+                    finishScan(STEP_NETWORK, "Network measured.");
+                });
+                return;
+            }
+            // Vibepollo's UDP burst calibration (PEN-10): how much PyroWave this link really carries
             post(() -> {
                 for (WizardProbes.Fact f : facts) addFact(f);
+                addSection("UDP burst test");
+                setBusy(true, "Sending test bursts from the host…");
+            });
+            List<WizardProbes.Fact> udp = WizardProbes.probeUdp(this, computer, binder, report,
+                    text -> post(() -> setBusy(true, text)));
+            post(() -> {
+                for (WizardProbes.Fact f : udp) addFact(f);
                 finishScan(STEP_NETWORK, "Network measured.");
             });
         });
