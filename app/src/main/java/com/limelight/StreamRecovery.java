@@ -114,11 +114,14 @@ final class StreamRecovery {
      * reaching the host, not a host refusal (pairing, permissions, a different app now running).
      */
     static boolean transientStartup(String stage, int portFlags, int error) {
-        // NvConnection reports Java transport failures with the two HTTP port flags and error 0
-        // (or -408 after its own retries)
-        if (portFlags != 0 && (error == 0 || error == -408)) return true;
-        // Native RTSP/control startup failures carry positive errno values
-        return portFlags != 0 && (error < 0 || transientTermination(error)) && stage != null &&
-                !stage.toLowerCase(Locale.ROOT).contains("video");
+        // Any failure on a host port is the network: NvConnection reports Java transport
+        // failures (no route while Wi-Fi is still coming back, timeouts) with the two HTTP port
+        // flags, and native RTSP/control/video startup failures carry the ports they used.
+        if (portFlags != 0) return true;
+        // A timeout after NvConnection's own retries
+        if (error == -408) return true;
+        // An errno from the transport. Error 0 without ports is NvConnection giving up for a
+        // reason it already showed (the app isn't running any more); HTTP codes are refusals.
+        return error != 0 && error != -1 && transientTermination(error);
     }
 }

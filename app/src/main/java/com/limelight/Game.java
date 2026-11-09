@@ -1933,6 +1933,12 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
         }
 
+        if (recoveryRestarting) {
+            // recreate() stops this instance inside the same activity record: finishing here
+            // would finish the relaunched instance that carries the recovery attempt
+            LimeLog.info("Stream recovery: restarting the stream screen");
+            return;
+        }
         finish();
     }
 
@@ -3689,14 +3695,27 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             return false;
         }
 
-        if (recoveryAttempt && !recoveryRestarting && StreamRecovery.transientStartup(stage, portFlags, errorCode)) {
-            final long delayMs = StreamRecovery.nextDelay(getIntent().getStringExtra(EXTRA_PC_UUID), appId, -1);
-            if (delayMs >= 0) {
-                LimeLog.warning("Stream recovery: " + stage + " failed (error " + errorCode + ", ports " + portFlags + ")");
-                runOnUiThread(() -> scheduleRecovery(delayMs, errorCode));
-                return false;
+        if (recoveryAttempt && recoveryRestarting) {
+            LimeLog.info("Stream recovery: " + stage + " failed (error " + errorCode + ") while restarting; ignored");
+            return false;
+        }
+        if (recoveryAttempt) {
+            LimeLog.warning("Stream recovery: attempt " + StreamRecovery.attempt() + " failed at " + stage +
+                    " (error " + errorCode + ", ports " + portFlags + ")");
+            if (StreamRecovery.transientStartup(stage, portFlags, errorCode)) {
+                // The network may still be down: this counts as an attempt and the backoff goes on
+                final long delayMs = StreamRecovery.nextDelay(getIntent().getStringExtra(EXTRA_PC_UUID), appId, -1);
+                if (delayMs >= 0) {
+                    runOnUiThread(() -> scheduleRecovery(delayMs, errorCode));
+                    return false;
+                }
+                LimeLog.warning("Stream recovery: giving up, out of attempts (" + StreamRecovery.describe() + ")");
             }
-            LimeLog.warning("Stream recovery: out of attempts (" + StreamRecovery.describe() + ")");
+            else {
+                LimeLog.warning("Stream recovery: giving up, " + stage + " failed with error " + errorCode +
+                        ", which isn't a network failure");
+            }
+            StreamRecovery.reset();
         }
 
         // Perform a connection test if the failure could be due to a blocked port
@@ -4268,24 +4287,30 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     // After a stream drops: reconnect to the same game if the failure looks transient
     private boolean tryRecovery(int errorCode, int portTestResult, boolean hadVideo) {
-        if (!prefConfig.autoRecoverStream || probeMode || errorCode == MoonBridge.ML_ERROR_GRACEFUL_TERMINATION) {
+        if (errorCode == MoonBridge.ML_ERROR_GRACEFUL_TERMINATION) {
+            StreamRecovery.reset();
+            return false;
+        }
+        if (!prefConfig.autoRecoverStream || probeMode) {
+            LimeLog.info("Stream recovery: off" + (probeMode ? " for trial streams" : "") + "; not reconnecting");
             return false;
         }
         if (!StreamRecovery.transientTermination(errorCode)) {
-            LimeLog.info("Stream recovery: error " + errorCode + " isn't transient; not reconnecting");
+            LimeLog.info("Stream recovery: giving up, error " + errorCode + " isn't transient");
+            StreamRecovery.reset();
             return false;
         }
-        if (portTestResult != MoonBridge.ML_TEST_RESULT_INCONCLUSIVE && portTestResult != 0) {
-            LimeLog.info("Stream recovery: ports look blocked; not reconnecting");
-            return false;
-        }
-        if (connectedAtMs < 0 || !hadVideo) {
-            LimeLog.info("Stream recovery: video never started; not reconnecting");
+        // No port test verdict here: video was flowing, and with the network down the test
+        // can't tell a blocked port from no network at all
+        if (connectedAtMs < 0 || (!hadVideo && !recoveryAttempt)) {
+            LimeLog.info("Stream recovery: giving up, video never started");
+            StreamRecovery.reset();
             return false;
         }
         long delayMs = StreamRecovery.nextDelay(getIntent().getStringExtra(EXTRA_PC_UUID), appId, connectedAtMs);
         if (delayMs < 0) {
-            LimeLog.warning("Stream recovery: out of attempts (" + StreamRecovery.describe() + ")");
+            LimeLog.warning("Stream recovery: giving up, out of attempts (" + StreamRecovery.describe() + ")");
+            StreamRecovery.reset();
             return false;
         }
         scheduleRecovery(delayMs, errorCode);
@@ -4294,7 +4319,13 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
     // Counts down to the next attempt, with a way out, then restarts this activity resume-only
     private void scheduleRecovery(long delayMs, int errorCode) {
-        if (isFinishing() || recoveryDialog != null) {
+        if (isFinishing()) {
+            LimeLog.warning("Stream recovery: giving up, the stream screen is closing");
+            StreamRecovery.reset();
+            return;
+        }
+        if (recoveryDialog != null) {
+            LimeLog.info("Stream recovery: an attempt is already counting down");
             return;
         }
         final int attempt = StreamRecovery.attempt();
