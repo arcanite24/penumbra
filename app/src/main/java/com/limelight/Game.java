@@ -748,8 +748,17 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             // the user's "Video frame pacing" setting. The chosen mode is now respected.
         } catch (Throwable ignored) {}
 
+        // PyroWave (PEN-9) is decoded on the GPU by the Vulkan renderer, and only when it's chosen.
+        // Where it can't be decoded, the stream falls back to the other codecs below.
+        boolean usePyrowave = prefConfig.videoFormat == PreferenceConfiguration.FormatOption.FORCE_PYROWAVE &&
+                decoderRenderer.isPyrowaveSupported();
+        if (prefConfig.videoFormat == PreferenceConfiguration.FormatOption.FORCE_PYROWAVE && !usePyrowave) {
+            com.limelight.utils.PenumbraToast.makeText(this, "This device can't decode PyroWave (it needs 64-bit Android 10+ with Vulkan 1.1)", Toast.LENGTH_LONG).show();
+        }
+
 // Don't stream HDR if the decoder can't support it
-        if (willStreamHdr && !decoderRenderer.isHevcMain10Hdr10Supported() && !decoderRenderer.isAv1Main10Supported()) {
+        if (willStreamHdr && !decoderRenderer.isHevcMain10Hdr10Supported() && !decoderRenderer.isAv1Main10Supported() &&
+                !usePyrowave) {
             willStreamHdr = false;
             com.limelight.utils.PenumbraToast.makeText(this, "Decoder does not support HDR10 profile", Toast.LENGTH_LONG).show();
         }
@@ -775,6 +784,14 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             supportedVideoFormats |= MoonBridge.VIDEO_FORMAT_AV1_MAIN8;
             if (willStreamHdr && decoderRenderer.isAv1Main10Supported()) {
                 supportedVideoFormats |= MoonBridge.VIDEO_FORMAT_AV1_MAIN10;
+            }
+        }
+        // PyroWave is offered alone: moonlight-common-c falls back to H.264 if the host doesn't
+        // advertise it, and the renderer handles either
+        if (usePyrowave) {
+            supportedVideoFormats = MoonBridge.VIDEO_FORMAT_PYROWAVE;
+            if (willStreamHdr) {
+                supportedVideoFormats |= MoonBridge.VIDEO_FORMAT_PYROWAVE_10BIT;
             }
         }
 
@@ -1826,6 +1843,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 selectedVideoFormat += "HEVC";
             } else if ((videoFormat & MoonBridge.VIDEO_FORMAT_MASK_AV1) != 0) {
                 selectedVideoFormat += "AV1";
+            } else if ((videoFormat & MoonBridge.VIDEO_FORMAT_MASK_PYROWAVE) != 0) {
+                selectedVideoFormat += "PyroWave";
             }
             else {
                 selectedVideoFormat += "UNKNOWN";

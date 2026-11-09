@@ -151,6 +151,14 @@ android {
         }
     }
 
+    // Prebuilt PyroWave decoder library (see src/main/jni/pyrowave/build_libpyrowave.sh).
+    // arm64-v8a only: the Vulkan renderer loads it at runtime and offers PyroWave only where it is.
+    sourceSets {
+        main {
+            jniLibs.srcDirs += 'src/main/jni/pyrowave/lib'
+        }
+    }
+
     splits {
         abi {
             enable true

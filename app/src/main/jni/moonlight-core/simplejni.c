@@ -270,3 +270,29 @@ Java_com_limelight_nvstream_jni_MoonBridge_guessControllerHasShareButton(JNIEnv 
     // Xbox Elite and DualSense Edge controllers have paddles
     return SDL_IsJoystickXboxSeriesX(vendorId, productId);
 }
+
+JNIEXPORT jlong JNICALL
+Java_com_limelight_nvstream_jni_MoonBridge_getHostTimeOnLocalClock(JNIEnv *env, jclass clazz, jlong presentationTimeUs) {
+    uint64_t localTimeUs;
+
+    if (!LiGetHostTimeOnLocalClock((uint64_t)presentationTimeUs, &localTimeUs)) {
+        return -1;
+    }
+
+    return (jlong)localTimeUs;
+}
+
+JNIEXPORT jlong JNICALL
+Java_com_limelight_nvstream_jni_MoonBridge_getVideoBytesReceived(JNIEnv *env, jclass clazz) {
+    return (jlong)LiGetRTPVideoStats()->byteCountReceived;
+}
+
+JNIEXPORT jlong JNICALL
+Java_com_limelight_nvstream_jni_MoonBridge_getMicroseconds(JNIEnv *env, jclass clazz) {
+    return (jlong)LiGetMicroseconds();
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_limelight_nvstream_jni_MoonBridge_getHostPyroWaveBitstreamId(JNIEnv *env, jclass clazz) {
+    return (*env)->NewStringUTF(env, LiGetHostPyroWaveBitstreamId());
+}

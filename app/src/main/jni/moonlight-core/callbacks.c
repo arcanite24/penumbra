@@ -1,6 +1,7 @@
 #include <jni.h>
 
 #include <pthread.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <Limelight.h>
@@ -9,6 +10,11 @@
 #include <android/log.h>
 
 #include <cpu-features.h>
+
+// Matches MoonBridge.PARTIAL_KIND_*
+#define PARTIAL_KIND_NONE 0
+#define PARTIAL_KIND_LOST 1 // Packets were lost
+#define PARTIAL_KIND_CUT 2  // Cut short at its deadline (see LiSetPartialFrameDeadline())
 
 static OpusMSDecoder* Decoder;
 static OPUS_MULTISTREAM_CONFIGURATION OpusConfig;
@@ -85,7 +91,7 @@ Java_com_limelight_nvstream_jni_MoonBridge_init(JNIEnv *env, jclass clazz) {
     BridgeDrStartMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeDrStart", "()V");
     BridgeDrStopMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeDrStop", "()V");
     BridgeDrCleanupMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeDrCleanup", "()V");
-    BridgeDrSubmitDecodeUnitMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeDrSubmitDecodeUnit", "([BIIIICJJ)I");
+    BridgeDrSubmitDecodeUnitMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeDrSubmitDecodeUnit", "([BIIIICJJJ[I[II)I");
     BridgeArInitMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeArInit", "(III)I");
     BridgeArStartMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeArStart", "()V");
     BridgeArStopMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeArStop", "()V");
@@ -156,11 +162,60 @@ int BridgeDrSubmitDecodeUnit(PDECODE_UNIT decodeUnit) {
     PLENTRY currentEntry;
     int offset;
 
+    // Whether, and how, the frame is partial (MoonBridge.PARTIAL_KIND_*). A frame cut short at
+    // its deadline may have no gaps: it can end where a block of its packets did.
+    const jint partialKind = !decodeUnit->partialFrame ? PARTIAL_KIND_NONE :
+                             decodeUnit->partialLate ? PARTIAL_KIND_CUT : PARTIAL_KIND_LOST;
+
+    // A partial frame's gaps, as offset and length pairs into the frame data, and in record
+    // framing where records start in it (an empty array if nowhere but the frame's start)
+    jintArray missingRanges = NULL;
+    jint* missing = NULL;
+    int missingCount = 0;
+    jintArray recordStartOffsets = NULL;
+    jint* recordStarts = NULL;
+    int recordStartCount = 0;
+    if (decodeUnit->partialFrame) {
+        for (currentEntry = decodeUnit->bufferList; currentEntry != NULL; currentEntry = currentEntry->next) {
+            if (currentEntry->bufferType == BUFFER_TYPE_MISSING) {
+                missingCount++;
+            }
+            else if (currentEntry->bufferType == BUFFER_TYPE_RECORD_START) {
+                recordStartCount++;
+            }
+        }
+        if (missingCount != 0) {
+            missing = malloc(sizeof(*missing) * 2 * missingCount);
+            if (missing == NULL) {
+                return DR_OK;
+            }
+            missingCount = 0;
+        }
+        if (decodeUnit->partialRecords) {
+            // At least one, so it's never NULL
+            recordStarts = malloc(sizeof(*recordStarts) * (recordStartCount + 1));
+            if (recordStarts == NULL) {
+                free(missing);
+                return DR_OK;
+            }
+            recordStartCount = 0;
+        }
+    }
+
     currentEntry = decodeUnit->bufferList;
     offset = 0;
     while (currentEntry != NULL) {
+        if (currentEntry->bufferType == BUFFER_TYPE_MISSING) {
+            // Nothing to copy: the gap is left as it is in the buffer
+            if (missing != NULL) {
+                missing[missingCount * 2] = offset;
+                missing[missingCount * 2 + 1] = currentEntry->length;
+                missingCount++;
+            }
+            offset += currentEntry->length;
+        }
         // Submit parameter set NALUs separately from picture data
-        if (currentEntry->bufferType != BUFFER_TYPE_PICDATA) {
+        else if (currentEntry->bufferType != BUFFER_TYPE_PICDATA && currentEntry->bufferType != BUFFER_TYPE_RECORD_START) {
             // Use the beginning of the buffer each time since this is a separate
             // invocation of the decoder each time.
             (*env)->SetByteArrayRegion(env, DecodedFrameBuffer, 0, currentEntry->length, (jbyte*)currentEntry->data);
@@ -168,17 +223,25 @@ int BridgeDrSubmitDecodeUnit(PDECODE_UNIT decodeUnit) {
             ret = (*env)->CallStaticIntMethod(env, GlobalBridgeClass, BridgeDrSubmitDecodeUnitMethod,
                                               DecodedFrameBuffer, currentEntry->length, currentEntry->bufferType,
                                               decodeUnit->frameNumber, decodeUnit->frameType, (jchar)decodeUnit->frameHostProcessingLatency,
-                                              (jlong)decodeUnit->receiveTimeMs, (jlong)decodeUnit->enqueueTimeMs);
+                                              (jlong)decodeUnit->receiveTimeUs, (jlong)decodeUnit->enqueueTimeUs, (jlong)decodeUnit->presentationTimeUs,
+                                              NULL, NULL, PARTIAL_KIND_NONE);
             if ((*env)->ExceptionCheck(env)) {
                 // We will crash here
+                free(missing);
+                free(recordStarts);
                 (*JVM)->DetachCurrentThread(JVM);
                 return DR_OK;
             }
             else if (ret != DR_OK) {
+                free(missing);
+                free(recordStarts);
                 return ret;
             }
         }
         else {
+            if (recordStarts != NULL && currentEntry->bufferType == BUFFER_TYPE_RECORD_START) {
+                recordStarts[recordStartCount++] = offset;
+            }
             (*env)->SetByteArrayRegion(env, DecodedFrameBuffer, offset, currentEntry->length, (jbyte*)currentEntry->data);
             offset += currentEntry->length;
         }
@@ -186,10 +249,45 @@ int BridgeDrSubmitDecodeUnit(PDECODE_UNIT decodeUnit) {
         currentEntry = currentEntry->next;
     }
 
+    if (missing != NULL) {
+        missingRanges = (*env)->NewIntArray(env, missingCount * 2);
+        if (missingRanges != NULL) {
+            (*env)->SetIntArrayRegion(env, missingRanges, 0, missingCount * 2, missing);
+        }
+        free(missing);
+        if (missingRanges == NULL) {
+            // Without the gaps the frame can't be read
+            (*env)->ExceptionClear(env);
+            free(recordStarts);
+            return DR_OK;
+        }
+    }
+    if (recordStarts != NULL) {
+        recordStartOffsets = (*env)->NewIntArray(env, recordStartCount);
+        if (recordStartOffsets != NULL) {
+            (*env)->SetIntArrayRegion(env, recordStartOffsets, 0, recordStartCount, recordStarts);
+        }
+        free(recordStarts);
+        if (recordStartOffsets == NULL) {
+            (*env)->ExceptionClear(env);
+            if (missingRanges != NULL) {
+                (*env)->DeleteLocalRef(env, missingRanges);
+            }
+            return DR_OK;
+        }
+    }
+
     ret = (*env)->CallStaticIntMethod(env, GlobalBridgeClass, BridgeDrSubmitDecodeUnitMethod,
                                        DecodedFrameBuffer, offset, BUFFER_TYPE_PICDATA,
                                        decodeUnit->frameNumber, decodeUnit->frameType, (jchar)decodeUnit->frameHostProcessingLatency,
-                                       (jlong)decodeUnit->receiveTimeMs, (jlong)decodeUnit->enqueueTimeMs);
+                                       (jlong)decodeUnit->receiveTimeUs, (jlong)decodeUnit->enqueueTimeUs, (jlong)decodeUnit->presentationTimeUs,
+                                       missingRanges, recordStartOffsets, partialKind);
+    if (missingRanges != NULL) {
+        (*env)->DeleteLocalRef(env, missingRanges);
+    }
+    if (recordStartOffsets != NULL) {
+        (*env)->DeleteLocalRef(env, recordStartOffsets);
+    }
     if ((*env)->ExceptionCheck(env)) {
         // We will crash here
         (*JVM)->DetachCurrentThread(JVM);
@@ -481,7 +579,9 @@ Java_com_limelight_nvstream_jni_MoonBridge_startConnection(JNIEnv *env, jclass c
             .clientRefreshRateX100 = clientRefreshRateX100,
             .encryptionFlags = ENCFLG_AUDIO,
             .colorSpace = colorSpace,
-            .colorRange = colorRange
+            .colorRange = colorRange,
+            // 0 would turn FEC off: -1 leaves it to the host, as LiInitializeStreamConfiguration() does
+            .fecPercentage = -1
     };
 
     jbyte* riAesKeyBuf = (*env)->GetByteArrayElements(env, riAesKey, NULL);
