@@ -401,6 +401,24 @@ public class StreamSettings extends AppCompatActivity implements SettingsSection
                 }
             }
 
+            // PyroWave needs the Vulkan renderer (64-bit Android 10+, Vulkan 1.1)
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q
+                    || !com.limelight.binding.video.VulkanRendererBridge.isPyrowaveSupported()) {
+                PreferenceCategory category = findPreference("category_pyrowave_settings");
+                if (category != null) {
+                    screen.removePreference(category);
+                }
+            }
+
+            // The Vulkan renderer (PEN-10) needs Android 10 and Vulkan 1.1 with AHardwareBuffer import
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q
+                    || !com.limelight.binding.video.VulkanRendererBridge.isSupported()) {
+                PreferenceCategory category = findPreference("category_vulkan_renderer_settings");
+                if (category != null) {
+                    screen.removePreference(category);
+                }
+            }
+
             // Hide remote desktop mouse mode on pre-Oreo (which doesn't have pointer capture)
             // and NVIDIA SHIELD devices (which support raw mouse input in pointer capture mode)
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O ||

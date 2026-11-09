@@ -16,11 +16,31 @@ public class MoonBridge {
     public static final int VIDEO_FORMAT_H265_MAIN10 = 0x0200;
     public static final int VIDEO_FORMAT_AV1_MAIN8 = 0x1000;
     public static final int VIDEO_FORMAT_AV1_MAIN10 = 0x2000;
+    // PyroWave (moonlight-common-c Limelight.h): decoded by the Vulkan renderer, not MediaCodec
+    public static final int VIDEO_FORMAT_PYROWAVE = 0x10000;
+    public static final int VIDEO_FORMAT_PYROWAVE_10BIT = 0x20000;
 
     public static final int VIDEO_FORMAT_MASK_H264 = 0x000F;
     public static final int VIDEO_FORMAT_MASK_H265 = 0x0F00;
     public static final int VIDEO_FORMAT_MASK_AV1 = 0xF000;
-    public static final int VIDEO_FORMAT_MASK_10BIT = 0x2200;
+    public static final int VIDEO_FORMAT_MASK_PYROWAVE = 0x30000;
+    public static final int VIDEO_FORMAT_MASK_10BIT = 0x22200;
+
+    // Host codec support (serverCodecModeSupport), as Vibepollo and the other PyroWave hosts define them
+    public static final int SCM_HEVC_MAIN10 = 0x00200;
+    public static final int SCM_AV1_MAIN10 = 0x20000;
+    public static final int SCM_PYROWAVE = 0x00800000;
+    public static final int SCM_PYROWAVE_444 = 0x01000000;
+    public static final int SCM_PYROWAVE_10BIT = 0x02000000;
+    public static final int SCM_PYROWAVE_10BIT_444 = 0x04000000;
+
+    // Decoders that set this get PyroWave frames that lost packets with gaps, rather than not at all
+    public static final int CAPABILITY_PARTIAL_FRAMES = 0x80;
+
+    // How a decode unit is partial (see VideoDecoderRenderer.submitDecodeUnit())
+    public static final int PARTIAL_KIND_NONE = 0;
+    public static final int PARTIAL_KIND_LOST = 1; // Packets were lost
+    public static final int PARTIAL_KIND_CUT = 2;  // Cut short at its deadline
 
     public static final int BUFFER_TYPE_PICDATA = 0;
     public static final int BUFFER_TYPE_SPS = 1;
@@ -102,6 +122,7 @@ public class MoonBridge {
     public static final byte LI_CTYPE_XBOX     = 0x01;
     public static final byte LI_CTYPE_PS       = 0x02;
     public static final byte LI_CTYPE_NINTENDO = 0x03;
+    public static final byte LI_CTYPE_STEAM    = 0x04;
 
     public static final short LI_CCAP_ANALOG_TRIGGERS = 0x01;
     public static final short LI_CCAP_RUMBLE          = 0x02;
@@ -111,6 +132,7 @@ public class MoonBridge {
     public static final short LI_CCAP_GYRO            = 0x20;
     public static final short LI_CCAP_BATTERY_STATE   = 0x40;
     public static final short LI_CCAP_RGB_LED         = 0x80;
+    public static final short LI_CCAP_DUAL_TOUCHPAD   = 0x100;
 
     public static final byte LI_MOTION_TYPE_ACCEL = 0x01;
     public static final byte LI_MOTION_TYPE_GYRO  = 0x02;
@@ -218,10 +240,12 @@ public class MoonBridge {
     //todo 不显示画面
     public static int bridgeDrSubmitDecodeUnit(byte[] decodeUnitData, int decodeUnitLength, int decodeUnitType,
                                                int frameNumber, int frameType, char frameHostProcessingLatency,
-                                               long receiveTimeMs, long enqueueTimeMs) {
+                                               long receiveTimeUs, long enqueueTimeUs, long presentationTimeUs,
+                                               int[] missingRanges, int[] recordStarts, int partialKind) {
         if (videoRenderer != null) {
             return videoRenderer.submitDecodeUnit(decodeUnitData, decodeUnitLength,
-                    decodeUnitType, frameNumber, frameType, frameHostProcessingLatency, receiveTimeMs, enqueueTimeMs);
+                    decodeUnitType, frameNumber, frameType, frameHostProcessingLatency,
+                    receiveTimeUs, enqueueTimeUs, presentationTimeUs, missingRanges, recordStarts, partialKind);
         }
         else {
             return DR_OK;
@@ -345,10 +369,11 @@ public class MoonBridge {
                                               int width, int height, int fps,
                                               int bitrate, int packetSize, int streamingRemotely,
                                               int audioConfiguration, int supportedVideoFormats,
-                                              int clientRefreshRateX100,
+                                              int clientRefreshRateX100, int clientRefreshRateUhz,
                                               byte[] riAesKey, byte[] riAesIv,
                                               int videoCapabilities,
-                                              int colorSpace, int colorRange);
+                                              int colorSpace, int colorRange,
+                                              int pyrowavePaceMbps);
 
     public static native void stopConnection();
 
@@ -413,6 +438,23 @@ public class MoonBridge {
 
     // The RTT is in the top 32 bits, and the RTT variance is in the bottom 32 bits
     public static native long getEstimatedRttInfo();
+
+    // The host's PyroWave bitstream revision from RTSP DESCRIBE ("" if it didn't say)
+    public static native String getHostPyroWaveBitstreamId();
+
+    public static native long getVideoBytesReceived();
+
+    // moonlight-common-c's clock, which decode unit times are on
+    public static native long getMicroseconds();
+
+    // A frame's host capture time on our clock, or -1 if the host's clock isn't known
+    public static native long getHostTimeOnLocalClock(long presentationTimeUs);
+
+    // How fast the host's clock runs against ours over the stream so far: parts per million
+    // (positive when it runs fast), then the seconds that's measured over. Null until clock sync
+    // has spanned 30 seconds, or when the host doesn't answer clock sync. Call it while the
+    // connection is still up (before stopConnection()).
+    public static native double[] getHostClockRate();
 
     public static native String getLaunchUrlQueryParameters();
 

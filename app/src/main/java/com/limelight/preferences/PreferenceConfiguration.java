@@ -22,6 +22,8 @@ public class PreferenceConfiguration {
         FORCE_AV1,
         FORCE_HEVC,
         FORCE_H264,
+        // PyroWave only, decoded on the GPU by the Vulkan renderer; never falls back to another codec
+        FORCE_PYROWAVE,
     };
 
     public enum AnalogStickForScrolling {
@@ -266,6 +268,8 @@ public class PreferenceConfiguration {
     public boolean onlyL3R3;
     public boolean showGuideButton;
     public boolean enableHdr;
+    /** Client automatic bitrate through the host's live /bitrate (PEN-10); off by default. */
+    public boolean autoBitrate;
     public boolean enablePip;
 
     public float parallax_depth;
@@ -280,6 +284,10 @@ public class PreferenceConfiguration {
     public boolean enablePerfOverlayLiteDialog;
 
     public boolean enablePerfOverlayBottom;
+    // The stats overlay shows capture to decoded and capture to present latency
+    public boolean perfOverlayLatency;
+    public boolean perfOverlayHostMetrics;
+    public boolean autoRecoverStream;
 
     public boolean enableLatencyToast;
     public boolean enableBackMenu;
@@ -369,6 +377,29 @@ public class PreferenceConfiguration {
     public boolean touchscreenTrackpad;
     public MoonBridge.AudioConfiguration audioConfiguration;
     public int framePacing;
+    // PyroWave renderer options (PEN-9); late frames is one of PYROWAVE_LATE_FRAMES_*
+    public static final int PYROWAVE_LATE_FRAMES_OFF = 0;
+    public static final int PYROWAVE_LATE_FRAMES_BALANCED = 1;
+    public static final int PYROWAVE_LATE_FRAMES_SMOOTH = 2;
+    public int pyrowaveLateFrames = PYROWAVE_LATE_FRAMES_BALANCED;
+    // Vulkan renderer options (PEN-10), for PyroWave and, with vulkanRenderer, H.264, HEVC and AV1.
+    // Front buffer and GPU boost keep the keys PEN-9 gave them under PyroWave.
+    public static final String VULKAN_RENDERER_PREF_STRING = "checkbox_vulkan_renderer";
+    public static final String VULKAN_FRONT_BUFFER_PREF_STRING = "checkbox_pyrowave_front_buffer";
+    public static final String VULKAN_GPU_BOOST_PREF_STRING = "checkbox_pyrowave_gpu_boost";
+    public static final String UPSCALER_PREF_STRING = "list_vulkan_upscaler";
+    public boolean vulkanRenderer;
+    public boolean vulkanFrontBuffer;
+    public boolean vulkanGpuBoost;
+    // How the Vulkan renderer scales a smaller stream up to the screen: vkr::Upscaler
+    public static final int UPSCALER_OFF = 0;
+    public static final int UPSCALER_FSR = 1;
+    public static final int UPSCALER_SGSR = 2;
+    public int upscaler = UPSCALER_OFF;
+    // DecoderInputBufferSizing.MODE_* (PEN-10)
+    public int decoderInputBufferMode = 0;
+    /** Frame pace for PyroWave streams from the Tune wizard's UDP test, Mbps; 0: the host's default (PEN-10). */
+    public int pyrowavePaceMbps;
     public boolean absoluteMouseMode;
     public boolean enableAudioFx;
     public boolean reduceRefreshRate;
@@ -600,6 +631,9 @@ public class PreferenceConfiguration {
         }
         else if (str.equals("neverh265")) {
             return FormatOption.FORCE_H264;
+        }
+        else if (str.equals("forcepyrowave")) {
+            return FormatOption.FORCE_PYROWAVE;
         }
         else {
             // Should never get here
@@ -860,6 +894,20 @@ private static int getFramePacingValue(Context context) {
 
         config.videoFormat = getVideoFormatValue(context);
         config.framePacing = getFramePacingValue(context);
+        config.decoderInputBufferMode = com.limelight.binding.video.DecoderInputBufferSizing.modeFromPreference(
+                prefs.getString("decoder_input_buffer", "auto"));
+        {
+            String lateFrames = prefs.getString("pyrowave_late_frames", "balanced");
+            config.pyrowaveLateFrames = "off".equals(lateFrames) ? PYROWAVE_LATE_FRAMES_OFF :
+                    "smooth".equals(lateFrames) ? PYROWAVE_LATE_FRAMES_SMOOTH : PYROWAVE_LATE_FRAMES_BALANCED;
+            config.vulkanRenderer = prefs.getBoolean(VULKAN_RENDERER_PREF_STRING, false);
+            config.vulkanFrontBuffer = prefs.getBoolean(VULKAN_FRONT_BUFFER_PREF_STRING, false);
+            config.vulkanGpuBoost = prefs.getBoolean(VULKAN_GPU_BOOST_PREF_STRING, false);
+            String upscaler = prefs.getString(UPSCALER_PREF_STRING, "off");
+            config.upscaler = "fsr".equals(upscaler) ? UPSCALER_FSR :
+                    "sgsr".equals(upscaler) ? UPSCALER_SGSR : UPSCALER_OFF;
+            config.pyrowavePaceMbps = Math.max(0, prefs.getInt("pyrowave_pace_mbps", 0));
+        }
         config.preferLowerDelays = getPreferLowerDelays(context);
 
 
@@ -921,12 +969,16 @@ private static int getFramePacingValue(Context context) {
         config.hideOSCWhenHasGamepad = prefs.getBoolean(CHECKBOX_HIDE_OSC_WHEN_HAS_GAMEPAD, DEFAULT_HIDE_OSC_WHEN_HAS_GAMEPAD);
         config.onlyL3R3 = prefs.getBoolean(ONLY_L3_R3_PREF_STRING, ONLY_L3_R3_DEFAULT);
         config.showGuideButton = prefs.getBoolean(SHOW_GUIDE_BUTTON_PREF_STRING, SHOW_GUIDE_BUTTON_DEFAULT);
+        config.autoBitrate = prefs.getBoolean("checkbox_auto_bitrate", false);
         config.enableHdr = prefs.getBoolean(ENABLE_HDR_PREF_STRING, DEFAULT_ENABLE_HDR) && !isShieldAtvFirmwareWithBrokenHdr();
         config.enablePip = prefs.getBoolean(ENABLE_PIP_PREF_STRING, DEFAULT_ENABLE_PIP);
         config.enablePerfOverlay = prefs.getBoolean(ENABLE_PERF_OVERLAY_STRING, DEFAULT_ENABLE_PERF_OVERLAY);
         config.enablePerfLogging = prefs.getBoolean(ENABLE_PERF_LOGGING, DEFAULT_ENABLE_PERF_LOGGING);
         config.enablePerfOverlayLite = prefs.getBoolean("checkbox_enable_perf_overlay_lite",DEFAULT_ENABLE_PERF_OVERLAY);
         config.enablePerfOverlayBottom = prefs.getBoolean("checkbox_enable_perf_overlay_bottom",DEFAULT_PERF_OVERLAY_BOTTOM);
+        config.perfOverlayLatency = prefs.getBoolean("checkbox_perf_overlay_latency", true);
+        config.perfOverlayHostMetrics = prefs.getBoolean("checkbox_perf_overlay_host_metrics", false);
+        config.autoRecoverStream = prefs.getBoolean("checkbox_auto_recover_stream", true);
         config.bindAllUsb = prefs.getBoolean(BIND_ALL_USB_STRING, DEFAULT_BIND_ALL_USB);
         config.mouseEmulation = prefs.getBoolean(MOUSE_EMULATION_STRING, DEFAULT_MOUSE_EMULATION);
         config.mouseNavButtons = prefs.getBoolean(MOUSE_NAV_BUTTONS_STRING, DEFAULT_MOUSE_NAV_BUTTONS);

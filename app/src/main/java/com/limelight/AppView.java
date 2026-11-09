@@ -1101,6 +1101,7 @@ public class AppView extends AppCompatActivity implements HomeAppAdapter.Listene
             case FORCE_AV1: codec = "AV1"; break;
             case FORCE_HEVC: codec = "HEVC"; break;
             case FORCE_H264: codec = "H.264"; break;
+            case FORCE_PYROWAVE: codec = "PyroWave"; break;
             default: codec = getString(R.string.home_codec_auto); break;
         }
 

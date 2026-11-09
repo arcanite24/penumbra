@@ -28,6 +28,8 @@ import com.limelight.binding.video.CrashListener;
 import com.limelight.binding.video.MediaCodecDecoderRenderer;
 import com.limelight.binding.video.MediaCodecHelper;
 import com.limelight.binding.video.PerfOverlayListener;
+import com.limelight.binding.video.DisplayRefreshMeter;
+import com.limelight.binding.video.HostClockRates;
 import com.limelight.nvstream.NvConnection;
 import com.limelight.nvstream.NvConnectionListener;
 import com.limelight.nvstream.StreamConfiguration;
@@ -112,6 +114,7 @@ import androidx.core.app.NotificationManagerCompat;
 import androidx.preference.PreferenceManager;
 
 import android.os.Looper;
+import android.os.SystemClock;
 import java.nio.charset.StandardCharsets;
 import java.util.HashSet;
 import java.util.List;
@@ -197,6 +200,11 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private String appName;
     private NvApp app;
     private float desiredRefreshRate;
+    // The display the stream is shown on, and the stream's configuration, which gets the frame
+    // rate for the host to run at once the display's refresh rate is measured
+    private Display streamDisplay;
+    private StreamConfiguration streamConfig;
+    private DisplayRefreshMeter refreshMeter;
 
     private InputCaptureProvider inputCaptureProvider;
     private int modifierFlags = 0;
@@ -273,6 +281,11 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     // values applied on top of the user's settings for this stream only. The stream is
     // measured, the host app is quit, and the numbers come back as the activity result.
     public static final String EXTRA_PROBE_OVERRIDES = "ProbeOverrides";
+    // Resolution hot-switch (PEN-10): the stream is reconnected with these instead of the saved
+    // settings. Vibepollo can't change the resolution of a running stream, so the switch ends this
+    // stream (without quitting the game) and starts a new one, which the host resumes.
+    public static final String EXTRA_RESOLUTION_OVERRIDE = "PenumbraResolution";
+    public static final String EXTRA_BITRATE_OVERRIDE = "PenumbraBitrateKbps";
     public static final String EXTRA_PROBE_WARMUP_MS = "ProbeWarmupMs";
     public static final String EXTRA_PROBE_MEASURE_MS = "ProbeMeasureMs";
     public static final String RESULT_PROBE_RECEIVED_FPS = "ProbeReceivedFps";
@@ -291,6 +304,15 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private boolean probeMode = false;
     private java.util.Map<String, Object> probeOverrides;
 
+    // Live bitrate through Vibepollo's /bitrate (PEN-10)
+    private com.limelight.bitrate.StreamBitrateController streamBitrate;
+    private int streamStartKbps;
+    // Client automatic bitrate (PEN-10)
+    private int autoCeilingKbps;
+    private String autoBitrateKey;
+    private long autoUpHoldMs = com.limelight.bitrate.AutoBitrateController.UP_HOLD_MS;
+    private float streamDisplayHz;
+
     public static final String CLIPBOARD_IDENTIFIER = "ArtemisStreaming";
 
     private String appUUID;
@@ -308,6 +330,16 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     private boolean clipboardSyncRunning = false;
 
     private NvHTTP httpConn;
+    private volatile com.limelight.utils.HostHardwareMetrics hostMetrics;
+    private volatile com.limelight.utils.WifiDiagnostics wifiDiagnostics;
+    private final com.limelight.utils.StallRhythm stallRhythm = new com.limelight.utils.StallRhythm();
+
+    // Automatic recovery (see StreamRecovery)
+    private boolean recoveryAttempt;
+    private boolean recoveryRestarting;
+    private long connectedAtMs = -1;
+    private AlertDialog recoveryDialog;
+    private final Handler recoveryHandler = new Handler(Looper.getMainLooper());
 
     public interface GameMenuCallbacks {
         void showMenu(GameInputDevice devic);
@@ -390,6 +422,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         // Read the stream preferences
         prefConfig = PreferenceConfiguration.readPreferences(this);
         tombstonePrefs = Game.this.getSharedPreferences("DecoderTombstone", 0);
+        applyResolutionSwitchOverrides();
 
         if (prefConfig.fullScreen) {
             // Full-screen
@@ -440,6 +473,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         }
 
         onExternelDisplay = currentDisplay.getDisplayId() != Display.DEFAULT_DISPLAY;
+        streamDisplay = currentDisplay;
 
         boolean shouldInvertDecoderResolution = false;
 
@@ -748,8 +782,17 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             // the user's "Video frame pacing" setting. The chosen mode is now respected.
         } catch (Throwable ignored) {}
 
+        // PyroWave (PEN-9) is decoded on the GPU by the Vulkan renderer, and only when it's chosen.
+        // Where it can't be decoded, the stream falls back to the other codecs below.
+        boolean usePyrowave = prefConfig.videoFormat == PreferenceConfiguration.FormatOption.FORCE_PYROWAVE &&
+                decoderRenderer.isPyrowaveSupported();
+        if (prefConfig.videoFormat == PreferenceConfiguration.FormatOption.FORCE_PYROWAVE && !usePyrowave) {
+            com.limelight.utils.PenumbraToast.makeText(this, "This device can't decode PyroWave (it needs 64-bit Android 10+ with Vulkan 1.1)", Toast.LENGTH_LONG).show();
+        }
+
 // Don't stream HDR if the decoder can't support it
-        if (willStreamHdr && !decoderRenderer.isHevcMain10Hdr10Supported() && !decoderRenderer.isAv1Main10Supported()) {
+        if (willStreamHdr && !decoderRenderer.isHevcMain10Hdr10Supported() && !decoderRenderer.isAv1Main10Supported() &&
+                !usePyrowave) {
             willStreamHdr = false;
             com.limelight.utils.PenumbraToast.makeText(this, "Decoder does not support HDR10 profile", Toast.LENGTH_LONG).show();
         }
@@ -777,6 +820,14 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 supportedVideoFormats |= MoonBridge.VIDEO_FORMAT_AV1_MAIN10;
             }
         }
+        // PyroWave is offered alone: moonlight-common-c falls back to H.264 if the host doesn't
+        // advertise it, and the renderer handles either
+        if (usePyrowave) {
+            supportedVideoFormats = MoonBridge.VIDEO_FORMAT_PYROWAVE;
+            if (willStreamHdr) {
+                supportedVideoFormats |= MoonBridge.VIDEO_FORMAT_PYROWAVE_10BIT;
+            }
+        }
 
         int gamepadMask = ControllerHandler.getAttachedControllerMask(this);
         if (!prefConfig.multiController) {
@@ -792,6 +843,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
         // Set to the optimal mode for streaming
         float displayRefreshRate = prepareDisplayForRendering(currentDisplay);
+        streamDisplayHz = displayRefreshRate;
         LimeLog.info("Display refresh rate: "+displayRefreshRate);
 
         // If the user requested frame pacing using a capped FPS, we will need to change our
@@ -820,6 +872,44 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             chosenFrameRate *= prefConfig.framePacingWarpFactor;
         }
 
+        // Is this activity reconnecting a stream that dropped? Then it only resumes.
+        String recoveryPcUuid = getIntent().getStringExtra(EXTRA_PC_UUID);
+        recoveryAttempt = prefConfig.autoRecoverStream && !probeMode &&
+                StreamRecovery.takePending(recoveryPcUuid, appId);
+        if (recoveryAttempt) {
+            LimeLog.info("Stream recovery: reconnecting, " + StreamRecovery.describe());
+            if (spinner != null) {
+                spinner.setMessage(getResources().getString(R.string.recovery_reconnecting,
+                        StreamRecovery.attempt(), StreamRecovery.MAX_ATTEMPTS));
+            }
+        }
+        else {
+            StreamRecovery.reset();
+        }
+        streamStartKbps = isMetered ? prefConfig.meteredBitrate : prefConfig.bitrate;
+        autoCeilingKbps = streamStartKbps;
+        if (prefConfig.autoBitrate && !probeMode) {
+            // Start at the limit learnt on this network for this host, if there is one
+            String network = com.limelight.bitrate.AutoBitrateMemory.networkId(this);
+            if (network != null) {
+                autoBitrateKey = com.limelight.bitrate.AutoBitrateMemory.key(getIntent().getStringExtra(EXTRA_PC_UUID), network);
+                com.limelight.bitrate.AutoBitrateMemory.Entry learnt = com.limelight.bitrate.AutoBitrateMemory.recall(this, autoBitrateKey);
+                if (learnt != null) {
+                    autoUpHoldMs = learnt.upHoldMs;
+                    int floor = com.limelight.bitrate.AutoBitrateController.floorKbps(displayWidth, displayHeight, prefConfig.fps);
+                    if (learnt.limitKbps > 0 && learnt.limitKbps < streamStartKbps) {
+                        streamStartKbps = Math.max(Math.min(floor, streamStartKbps), learnt.limitKbps);
+                    }
+                    LimeLog.info("Bitrate: auto: network " + network + " learnt limit " + learnt.limitKbps
+                            + " kbps, starting at " + streamStartKbps + " kbps (ceiling " + autoCeilingKbps + ")");
+                } else {
+                    LimeLog.info("Bitrate: auto: network " + network + ", nothing learnt yet, starting at " + streamStartKbps + " kbps");
+                }
+            } else {
+                LimeLog.info("Bitrate: auto: no network id; nothing will be remembered");
+            }
+        }
+
         StreamConfiguration config = new StreamConfiguration.Builder()
                 .setResolution(
                         displayWidth,
@@ -830,8 +920,9 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 .setVirtualDisplay(vDisplay)
                 .setResolutionScaleFactor(prefConfig.resolutionScaleFactor)
                 .setApp(app)
+                .setResumeOnly(recoveryAttempt)
                 .setEnableUltraLowLatency(prefConfig.enableUltraLowLatency)
-                .setBitrate(isMetered ? prefConfig.meteredBitrate: prefConfig.bitrate)
+                .setBitrate(streamStartKbps)
                 .setEnableSops(prefConfig.enableSops)
                 .enableLocalAudioPlayback(prefConfig.playHostAudio)
                 .setMaxPacketSize(1392)
@@ -842,8 +933,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 .setAudioConfiguration(prefConfig.audioConfiguration)
                 .setColorSpace(decoderRenderer.getPreferredColorSpace())
                 .setColorRange(decoderRenderer.getPreferredColorRange())
+                .setPyrowavePaceMbps(prefConfig.pyrowavePaceMbps)
                 .setPersistGamepadsAfterDisconnect(!prefConfig.multiController)
                 .build();
+        streamConfig = config;
 
         // Initialize the connection
         conn = new NvConnection(getApplicationContext(),
@@ -910,15 +1003,15 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
         streamContainer.setOnSurfaceAvailable(() -> {
             if (!attemptedConnection) {
-                LimeLog.info("Surface is available, starting connection...");
+                LimeLog.info("Surface is available, measuring the display before connecting...");
                 attemptedConnection = true;
 
-                // Der Decoder erhält die jeweils aktive Oberfläche vom Container
-                decoderRenderer.setRenderTarget(streamContainer.getSurface());
-
-                // Starten Sie die NvConnection
-                conn.start(new AndroidAudioRenderer(Game.this, prefConfig.playHostAudio),
-                        decoderRenderer, Game.this);
+                // Measure the display's actual refresh rate first, now that its mode is set, so
+                // the host can be asked for a frame rate that lines up with our vsyncs
+                refreshMeter = DisplayRefreshMeter.measure(streamDisplay, refreshHz -> {
+                    refreshMeter = null;
+                    startConnection(refreshHz);
+                });
             }
         });
 
@@ -941,7 +1034,21 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 // Avoid resizes/glitches that break the compositor
                 int vw = (prefConfig != null && prefConfig.width > 0) ? prefConfig.width : displayWidth;
                 int vh = (prefConfig != null && prefConfig.height > 0) ? prefConfig.height : displayHeight;
-                try { streamSurfaceView.getHolder().setFixedSize(vw, vh); } catch (Throwable ignored) {}
+                // PEN-10: with an upscaler, the Vulkan renderer draws at the view's size, scaling the
+                // stream up itself, so the surface keeps the view's size rather than the stream's.
+                // The renderer only upscales when the surface is larger than the stream.
+                boolean vulkanUpscaling = prefConfig != null
+                        && prefConfig.upscaler != PreferenceConfiguration.UPSCALER_OFF
+                        && prefConfig.renderMode == 0
+                        && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+                        && (prefConfig.vulkanRenderer
+                            || prefConfig.videoFormat == PreferenceConfiguration.FormatOption.FORCE_PYROWAVE)
+                        && com.limelight.binding.video.VulkanRendererBridge.isSupported();
+                if (vulkanUpscaling) {
+                    LimeLog.info("Upscaling in the Vulkan renderer: the stream surface keeps the view's size");
+                } else {
+                    try { streamSurfaceView.getHolder().setFixedSize(vw, vh); } catch (Throwable ignored) {}
+                }
                 try { streamSurfaceView.setZOrderOnTop(false); } catch (Throwable ignored) {}
                 try { streamSurfaceView.setZOrderMediaOverlay(false); } catch (Throwable ignored) {}
 
@@ -1363,27 +1470,60 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         }
     }
 
-    public void setMetaKeyCaptureState(boolean enabled) {
-        // This uses custom APIs present on some Samsung devices to allow capture of
-        // meta key events while streaming.
-        try {
-            Class<?> semWindowManager = Class.forName("com.samsung.android.view.SemWindowManager");
-            Method getInstanceMethod = semWindowManager.getMethod("getInstance");
-            Object manager = getInstanceMethod.invoke(null);
+    // Build.VERSION_CODES_FULL.BAKLAVA_1: SDK_INT_FULL is major * 100000 + minor
+    private static final int SDK_INT_FULL_BAKLAVA_1 = 36 * 100000 + 1;
 
-            if (manager != null) {
-                Class<?>[] parameterTypes = new Class<?>[2];
-                parameterTypes[0] = ComponentName.class;
-                parameterTypes[1] = boolean.class;
-                Method requestMetaKeyEventMethod = semWindowManager.getDeclaredMethod("requestMetaKeyEvent", parameterTypes);
-                requestMetaKeyEventMethod.invoke(manager, this.getComponentName(), enabled);
+    // Uses WindowManager.LayoutParams.setKeyboardCaptureEnabled() on Android 16 QPR2 (API 36.1)
+    // and later. Returns false where it isn't available, so the caller falls back.
+    private boolean setNativeKeyboardCapture(boolean enabled) {
+        try {
+            int sdkIntFull = Build.VERSION.class.getField("SDK_INT_FULL").getInt(null);
+            if (sdkIntFull < SDK_INT_FULL_BAKLAVA_1) {
+                return false;
             }
-            else {
-                LimeLog.warning("SemWindowManager.getInstance() returned null");
+
+            WindowManager.LayoutParams windowLayoutParams = getWindow().getAttributes();
+            WindowManager.LayoutParams.class.getMethod("setKeyboardCaptureEnabled", boolean.class)
+                    .invoke(windowLayoutParams, enabled);
+            getWindow().setAttributes(windowLayoutParams);
+            return true;
+        } catch (ReflectiveOperationException e) {
+            return false;
+        }
+    }
+
+    public void setMetaKeyCaptureState(boolean enabled) {
+        // Android has native keyboard capture support starting in API 36.1. Penumbra compiles
+        // against API 36, so the 36.1 APIs are reached by reflection.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA && setNativeKeyboardCapture(enabled)) {
+            return;
+        }
+        else {
+            // This uses custom APIs present on some Samsung devices to allow capture of
+            // meta key events while streaming.
+            try {
+                Class<?> semWindowManager = Class.forName("com.samsung.android.view.SemWindowManager");
+                Method getInstanceMethod = semWindowManager.getMethod("getInstance");
+                Object manager = getInstanceMethod.invoke(null);
+
+                if (manager != null) {
+                    Class<?>[] parameterTypes = new Class<?>[2];
+                    parameterTypes[0] = ComponentName.class;
+                    parameterTypes[1] = boolean.class;
+                    Method requestMetaKeyEventMethod = semWindowManager.getDeclaredMethod("requestMetaKeyEvent", parameterTypes);
+                    requestMetaKeyEventMethod.invoke(manager, this.getComponentName(), enabled);
+                }
+                else {
+                    LimeLog.warning("SemWindowManager.getInstance() returned null");
+                }
+            } catch (ClassNotFoundException ignored) {
+            } catch (NoSuchMethodException e) {
+                e.printStackTrace();
+            } catch (InvocationTargetException e) {
+                e.printStackTrace();
+            } catch (IllegalAccessException e) {
+                e.printStackTrace();
             }
-        } catch (ClassNotFoundException | NoSuchMethodException | InvocationTargetException |
-                 IllegalAccessException e) {
-            e.printStackTrace();
         }
     }
 
@@ -1762,6 +1902,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         // Destroy the capture provider
         inputCaptureProvider.destroy();
         streamContainer.onDestroy();
+
+        // Resolution hot-switch: this stream is stopping (NvConnection lets the next one start
+        // only after it's done), so the new one can start now
+        startResolutionSwitch();
     }
 
     @Override
@@ -1782,6 +1926,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     @Override
     protected void onStop() {
         super.onStop();
+
+        if (recoveryDialog != null && !recoveryRestarting) {
+            cancelRecovery(false);
+        }
 
         SpinnerDialog.closeDialogs(this);
         Dialog.closeDialogs();
@@ -1826,6 +1974,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 selectedVideoFormat += "HEVC";
             } else if ((videoFormat & MoonBridge.VIDEO_FORMAT_MASK_AV1) != 0) {
                 selectedVideoFormat += "AV1";
+            } else if ((videoFormat & MoonBridge.VIDEO_FORMAT_MASK_PYROWAVE) != 0) {
+                selectedVideoFormat += "PyroWave";
             }
             else {
                 selectedVideoFormat += "UNKNOWN";
@@ -1841,7 +1991,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 message += selectedVideoFormat;
             }
 
-            if (message != null) {
+            if (message != null && !recoveryRestarting) {
                 if (prefConfig.enableLatencyToast) {
                     com.limelight.utils.PenumbraToast.makeText(this, message, Toast.LENGTH_LONG).show();
                 }
@@ -1874,6 +2024,12 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
         }
 
+        if (recoveryRestarting) {
+            // recreate() stops this instance inside the same activity record: finishing here
+            // would finish the relaunched instance that carries the recovery attempt
+            LimeLog.info("Stream recovery: restarting the stream screen");
+            return;
+        }
         finish();
     }
 
@@ -2050,6 +2206,18 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         }
         if (event.isMetaPressed()) {
             modifier |= KeyboardPacket.MODIFIER_META;
+        }
+        return applyKeySpecificModifiers(event.getKeyCode(), modifier);
+    }
+
+    private byte getModifierState(int keyCode) {
+        return applyKeySpecificModifiers(keyCode, getModifierState());
+    }
+
+    private byte applyKeySpecificModifiers(int keyCode, byte modifier) {
+        if (keyCode == KeyEvent.KEYCODE_PLUS) {
+            // The host protocol has a single US =/+ virtual key, so Android's semantic plus key needs Shift.
+            modifier |= KeyboardPacket.MODIFIER_SHIFT;
         }
         return modifier;
     }
@@ -3463,7 +3631,13 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             @Override
             public void run() {
                 if (spinner != null) {
-                    spinner.setMessage(getResources().getString(R.string.conn_starting) + " " + stage);
+                    if (recoveryAttempt) {
+                        spinner.setMessage(getResources().getString(R.string.recovery_reconnecting,
+                                StreamRecovery.attempt(), StreamRecovery.MAX_ATTEMPTS));
+                    }
+                    else {
+                        spinner.setMessage(getResources().getString(R.string.conn_starting) + " " + stage);
+                    }
                 }
             }
         });
@@ -3473,8 +3647,87 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     public void stageComplete(String stage) {
     }
 
+    // The frame rate for the host to run at, to line up with the display: its measured refresh
+    // rate (or nominal one, if that couldn't be measured) over the vsyncs each frame is shown for,
+    // allowing for how fast the host's clock ran in its last stream
+    private void applyHostFrameRate(double measuredRefreshHz) {
+        if (prefConfig.framePacingWarpFactor > 0) {
+            // The frame rate is deliberately off the display's: leave it as configured
+            return;
+        }
+
+        double refreshHz = measuredRefreshHz > 0 ? measuredRefreshHz : streamDisplay.getRefreshRate();
+        double hostRate = DisplayRefreshMeter.streamMatchedRate(refreshHz, streamConfig.getRefreshRate());
+        if (hostRate <= 0) {
+            // No host rate lines up with our vsyncs (90 FPS at 120 Hz): ask for none
+            streamConfig.setClientRefreshRateX100(0);
+            streamConfig.setClientRefreshRateUhz(0);
+            LimeLog.info(String.format(Locale.ROOT, "Stream at %.2f FPS doesn't divide the %.4f Hz display; no exact rate sent",
+                    streamConfig.getRefreshRate(), refreshHz));
+            return;
+        }
+
+        // The host paces frames on its own clock, so undo how far off ours that runs
+        String computerUuid = getIntent().getStringExtra(EXTRA_PC_UUID);
+        double hostClockPpm = HostClockRates.get(this, computerUuid);
+        double requestHz = HostClockRates.hostRequestHz(hostRate, hostClockPpm);
+        streamConfig.setClientRefreshRateX100((int) Math.round(requestHz * 100));
+        streamConfig.setClientRefreshRateUhz((int) Math.round(requestHz * 1e6));
+        LimeLog.info(String.format(Locale.ROOT,
+                "Asking the host for %.6f FPS (%.6f on our clock, display %.4f Hz %s, host clock %+.1f ppm)",
+                requestHz, hostRate, refreshHz, measuredRefreshHz > 0 ? "measured" : "nominal", hostClockPpm));
+    }
+
+    private void startConnection(double measuredRefreshHz) {
+        if (isFinishing() || conn == null) {
+            return;
+        }
+        Surface surface = streamContainer.getSurface();
+        if (surface != null && !surface.isValid()) {
+            // The surface went away while measuring; start when it's back
+            LimeLog.info("Surface gone before the connection started; waiting for it");
+            attemptedConnection = false;
+            return;
+        }
+
+        applyHostFrameRate(measuredRefreshHz);
+
+        // Der Decoder erhält die jeweils aktive Oberfläche vom Container
+        decoderRenderer.setRenderTarget(surface);
+
+        // Starten Sie die NvConnection
+        conn.start(new AndroidAudioRenderer(Game.this, prefConfig.playHostAudio),
+                decoderRenderer, Game.this);
+    }
+
     private void stopConnection() {
+        if (refreshMeter != null) {
+            refreshMeter.cancel();
+            refreshMeter = null;
+        }
+        if (hostMetrics != null) {
+            hostMetrics.stop();
+            hostMetrics = null;
+        }
+        if (wifiDiagnostics != null) {
+            wifiDiagnostics.stop();
+            wifiDiagnostics = null;
+        }
+        if (decoderRenderer != null) {
+            decoderRenderer.setStreamSampleListener(null);
+        }
+        if (streamBitrate != null) {
+            streamBitrate.stop();
+            streamBitrate = null;
+        }
         if (connecting || connected) {
+            if (connected) {
+                // Measured over the stream, for the next one to ask for a rate that allows for it
+                double[] hostClock = MoonBridge.getHostClockRate();
+                if (hostClock != null) {
+                    HostClockRates.save(this, getIntent().getStringExtra(EXTRA_PC_UUID), hostClock[0], hostClock[1]);
+                }
+            }
             connecting = connected = false;
             updatePipAutoEnter();
 
@@ -3547,6 +3800,29 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 finish();
             });
             return false;
+        }
+
+        if (recoveryAttempt && recoveryRestarting) {
+            LimeLog.info("Stream recovery: " + stage + " failed (error " + errorCode + ") while restarting; ignored");
+            return false;
+        }
+        if (recoveryAttempt) {
+            LimeLog.warning("Stream recovery: attempt " + StreamRecovery.attempt() + " failed at " + stage +
+                    " (error " + errorCode + ", ports " + portFlags + ")");
+            if (StreamRecovery.transientStartup(stage, portFlags, errorCode)) {
+                // The network may still be down: this counts as an attempt and the backoff goes on
+                final long delayMs = StreamRecovery.nextDelay(getIntent().getStringExtra(EXTRA_PC_UUID), appId, -1);
+                if (delayMs >= 0) {
+                    runOnUiThread(() -> scheduleRecovery(delayMs, errorCode));
+                    return false;
+                }
+                LimeLog.warning("Stream recovery: giving up, out of attempts (" + StreamRecovery.describe() + ")");
+            }
+            else {
+                LimeLog.warning("Stream recovery: giving up, " + stage + " failed with error " + errorCode +
+                        ", which isn't a network failure");
+            }
+            StreamRecovery.reset();
         }
 
         // Perform a connection test if the failure could be due to a blocked port
@@ -3652,7 +3928,12 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 if (!displayedFailureDialog) {
                     displayedFailureDialog = true;
                     LimeLog.severe("Connection terminated: " + errorCode);
+                    boolean hadVideo = decoderRenderer != null && decoderRenderer.hasReceivedFrames();
                     stopConnection();
+
+                    if (tryRecovery(errorCode, portTestResult, hadVideo)) {
+                        return;
+                    }
 
                     // Display the error dialog if it was an unexpected termination.
                     // Otherwise, just finish the activity immediately.
@@ -3761,6 +4042,24 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 connected = true;
                 connecting = false;
                 updatePipAutoEnter();
+                connectedAtMs = SystemClock.elapsedRealtime();
+
+                if (recoveryAttempt) {
+                    LimeLog.info("Stream recovery: reconnected on attempt " + StreamRecovery.attempt());
+                    com.limelight.utils.PenumbraToast.makeText(Game.this, getResources().getString(R.string.recovery_done), Toast.LENGTH_SHORT).show();
+                }
+
+                startStreamDiagnostics();
+
+                if (prefConfig.enablePerfOverlay && prefConfig.perfOverlayHostMetrics && httpConn != null && hostMetrics == null) {
+                    if (conn.getHostHardwareMetricsVersion() >= 1) {
+                        hostMetrics = new com.limelight.utils.HostHardwareMetrics(Game.this, httpConn);
+                        hostMetrics.start();
+                    }
+                    else {
+                        LimeLog.info("Host doesn't offer hardware metrics");
+                    }
+                }
 
                 // Hide the mouse cursor now after a short delay.
                 // Doing it before dismissing the spinner seems to be undone
@@ -3794,6 +4093,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
 
                 if (probeMode) {
                     startProbeMeasurement();
+                } else {
+                    startStreamBitrate();
                 }
             }
         });
@@ -3920,12 +4221,30 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             holder.getSurface().setFrameRate(desiredFrameRate,
                     Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE);
         }
+
+        // Disable producer throttling on the underlying surface for reduced latency (Android 17+).
+        // Penumbra compiles against API 36, so Surface.setProducerThrottlingEnabled() is called by reflection.
+        if (Build.VERSION.SDK_INT >= 37) {
+            try {
+                Surface.class.getMethod("setProducerThrottlingEnabled", boolean.class)
+                        .invoke(holder.getSurface(), false);
+            } catch (ReflectiveOperationException e) {
+                LimeLog.warning("Unable to disable producer throttling: " + e);
+            }
+        }
     }
 
     @Override
     public void surfaceDestroyed(SurfaceHolder holder) {
         if (!surfaceCreated) {
             throw new IllegalStateException("Surface destroyed before creation!");
+        }
+
+        if (refreshMeter != null) {
+            // The connection hadn't started yet. It starts when the surface is back.
+            refreshMeter.cancel();
+            refreshMeter = null;
+            attemptedConnection = false;
         }
 
         if (attemptedConnection) {
@@ -3997,10 +4316,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             }
 
             if (buttonDown) {
-                conn.sendKeyboardInput(keyMap, KeyboardPacket.KEY_DOWN, getModifierState(), (byte)0);
+                conn.sendKeyboardInput(keyMap, KeyboardPacket.KEY_DOWN, getModifierState(keyCode), (byte)0);
             }
             else {
-                conn.sendKeyboardInput(keyMap, KeyboardPacket.KEY_UP, getModifierState(), (byte)0);
+                conn.sendKeyboardInput(keyMap, KeyboardPacket.KEY_UP, getModifierState(keyCode), (byte)0);
             }
         }
     }
@@ -4022,7 +4341,8 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     }
 
     @Override
-    public void onPerfUpdate(final String text) {
+    public void onPerfUpdate(final String perfText) {
+        final String text = withStreamFacts(perfText);
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
@@ -4033,6 +4353,165 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 }
             }
         });
+    }
+
+    // Lines the decoder doesn't know about: the Wi-Fi link and the host's hardware load
+    private String withStreamFacts(String text) {
+        String separator = prefConfig.enablePerfOverlayLite ? "\t " : "\n";
+        StringBuilder sb = new StringBuilder(text);
+        com.limelight.utils.WifiDiagnostics wifi = wifiDiagnostics;
+        if (wifi != null) {
+            String wifiText = com.limelight.utils.WifiDiagnostics.describe(this, wifi.latest(),
+                    lowLatencyWifiLock != null && lowLatencyWifiLock.isHeld(), stallRhythm.periodMs());
+            if (prefConfig.enablePerfOverlayLite) {
+                wifiText = wifiText.replace("\n", " · ");
+            }
+            appendLine(sb, separator, wifiText);
+        }
+        com.limelight.utils.HostHardwareMetrics metrics = hostMetrics;
+        String metricsLine = metrics != null ? metrics.latestLine() : null;
+        if (metricsLine != null) {
+            appendLine(sb, separator, metricsLine);
+        }
+        return sb.toString();
+    }
+
+    // Wi-Fi link facts for the overlay and the log, and a watch for stalls in a steady rhythm
+    private void startStreamDiagnostics() {
+        if (wifiDiagnostics == null) {
+            wifiDiagnostics = new com.limelight.utils.WifiDiagnostics(this);
+            wifiDiagnostics.start();
+        }
+        decoderRenderer.setStreamSampleListener((lossPercent, rttVarianceMs, fps) -> {
+            if (!stallRhythm.add(SystemClock.elapsedRealtime(), lossPercent, rttVarianceMs, fps)) {
+                return;
+            }
+            com.limelight.utils.WifiDiagnostics wifi = wifiDiagnostics;
+            com.limelight.utils.WifiFacts facts = wifi != null ? wifi.latest() : null;
+            final long periodMs = stallRhythm.periodMs();
+            LimeLog.warning(String.format(Locale.ROOT,
+                    "Network stalls repeat every %.1f s (%d stalls in the last 20 min, on %s); likely background Wi-Fi scans",
+                    periodMs / 1000.0, stallRhythm.stalls(), facts != null ? String.valueOf(facts.link) : "unknown link"));
+            if (facts != null && !facts.onWifi()) {
+                return;
+            }
+            runOnUiThread(() -> {
+                if (prefConfig.disableWarnings || isFinishing()) {
+                    return;
+                }
+                com.limelight.utils.PenumbraToast.makeText(Game.this, getResources().getString(R.string.stall_rhythm_notice,
+                        com.limelight.utils.WifiDiagnostics.period(Game.this, periodMs)), Toast.LENGTH_LONG).show();
+            });
+        });
+    }
+
+    // After a stream drops: reconnect to the same game if the failure looks transient
+    private boolean tryRecovery(int errorCode, int portTestResult, boolean hadVideo) {
+        if (errorCode == MoonBridge.ML_ERROR_GRACEFUL_TERMINATION) {
+            StreamRecovery.reset();
+            return false;
+        }
+        if (!prefConfig.autoRecoverStream || probeMode) {
+            LimeLog.info("Stream recovery: off" + (probeMode ? " for trial streams" : "") + "; not reconnecting");
+            return false;
+        }
+        if (!StreamRecovery.transientTermination(errorCode)) {
+            LimeLog.info("Stream recovery: giving up, error " + errorCode + " isn't transient");
+            StreamRecovery.reset();
+            return false;
+        }
+        // No port test verdict here: video was flowing, and with the network down the test
+        // can't tell a blocked port from no network at all
+        if (connectedAtMs < 0 || (!hadVideo && !recoveryAttempt)) {
+            LimeLog.info("Stream recovery: giving up, video never started");
+            StreamRecovery.reset();
+            return false;
+        }
+        long delayMs = StreamRecovery.nextDelay(getIntent().getStringExtra(EXTRA_PC_UUID), appId, connectedAtMs);
+        if (delayMs < 0) {
+            LimeLog.warning("Stream recovery: giving up, out of attempts (" + StreamRecovery.describe() + ")");
+            StreamRecovery.reset();
+            return false;
+        }
+        scheduleRecovery(delayMs, errorCode);
+        return true;
+    }
+
+    // Counts down to the next attempt, with a way out, then restarts this activity resume-only
+    private void scheduleRecovery(long delayMs, int errorCode) {
+        if (isFinishing()) {
+            LimeLog.warning("Stream recovery: giving up, the stream screen is closing");
+            StreamRecovery.reset();
+            return;
+        }
+        if (recoveryDialog != null) {
+            LimeLog.info("Stream recovery: an attempt is already counting down");
+            return;
+        }
+        final int attempt = StreamRecovery.attempt();
+        LimeLog.warning(String.format(Locale.ROOT, "Stream recovery: attempt %d of %d in %d ms (error %d)",
+                attempt, StreamRecovery.MAX_ATTEMPTS, delayMs, errorCode));
+        if (spinner != null) {
+            spinner.dismiss();
+            spinner = null;
+        }
+        final long dueAt = SystemClock.uptimeMillis() + delayMs;
+        recoveryDialog = new AlertDialog.Builder(this)
+                .setTitle(R.string.recovery_title)
+                .setMessage(recoveryCountdown(dueAt, attempt))
+                .setCancelable(false)
+                .setNegativeButton(R.string.cancel, (dialog, which) -> cancelRecovery(true))
+                .show();
+        recoveryHandler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                long leftMs = dueAt - SystemClock.uptimeMillis();
+                if (recoveryDialog == null) {
+                    return;
+                }
+                if (leftMs <= 0) {
+                    restartForRecovery();
+                    return;
+                }
+                recoveryDialog.setMessage(recoveryCountdown(dueAt, attempt));
+                recoveryHandler.postDelayed(this, Math.min(1000, leftMs));
+            }
+        }, Math.min(1000, delayMs));
+    }
+
+    private String recoveryCountdown(long dueAt, int attempt) {
+        int seconds = (int) Math.max(1, Math.ceil((dueAt - SystemClock.uptimeMillis()) / 1000.0));
+        return getResources().getString(R.string.recovery_countdown, appName, seconds, attempt, StreamRecovery.MAX_ATTEMPTS);
+    }
+
+    private void cancelRecovery(boolean byUser) {
+        recoveryHandler.removeCallbacksAndMessages(null);
+        if (recoveryDialog != null) {
+            recoveryDialog.dismiss();
+            recoveryDialog = null;
+        }
+        StreamRecovery.reset();
+        LimeLog.info(byUser ? "Stream recovery: cancelled by the user" : "Stream recovery: cancelled, the stream was left");
+        finish();
+    }
+
+    private void restartForRecovery() {
+        recoveryHandler.removeCallbacksAndMessages(null);
+        if (recoveryDialog != null) {
+            recoveryDialog.dismiss();
+            recoveryDialog = null;
+        }
+        recoveryRestarting = true;
+        StreamRecovery.markPending(getIntent().getStringExtra(EXTRA_PC_UUID), appId);
+        // A fresh activity builds a fresh connection, decoder and surface; it resumes only
+        recreate();
+    }
+
+    private static void appendLine(StringBuilder sb, String separator, String line) {
+        if (sb.length() > 0 && sb.charAt(sb.length() - 1) != '\n') {
+            sb.append(separator);
+        }
+        sb.append(line);
     }
 
     @Override
@@ -4364,6 +4843,223 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 finish();
             }, measureMs);
         }, warmupMs);
+    }
+
+    // ---------------------------------------------------------------- live bitrate (PEN-10)
+
+    private void startStreamBitrate() {
+        if (httpConn == null || streamBitrate != null) {
+            return;
+        }
+        decoderRenderer.setStreamBitrateLabel(com.limelight.bitrate.StreamBitrateController.formatMbps(streamStartKbps));
+        streamBitrate = new com.limelight.bitrate.StreamBitrateController(httpConn, streamStartKbps,
+                new com.limelight.bitrate.StreamBitrateController.Listener() {
+                    @Override
+                    public void onBitrateApplied(int kbps, String source) {
+                        updateStreamBitrateLabel();
+                        if ("auto-down".equals(source) && !prefConfig.disableWarnings) {
+                            displayTransientMessage(getString(R.string.bitrate_auto_down,
+                                    com.limelight.bitrate.StreamBitrateController.formatMbps(kbps)));
+                        }
+                        if ("menu".equals(source)) {
+                            com.limelight.utils.PenumbraToast.makeText(Game.this,
+                                    getString(R.string.bitrate_applied, com.limelight.bitrate.StreamBitrateController.formatMbps(kbps)),
+                                    Toast.LENGTH_SHORT).show();
+                        }
+                    }
+
+                    @Override
+                    public void onBitrateFailed(String message, String source) {
+                        if ("menu".equals(source)) {
+                            com.limelight.utils.PenumbraToast.makeText(Game.this,
+                                    getString(R.string.bitrate_failed, message), Toast.LENGTH_LONG).show();
+                        }
+                    }
+
+                    @Override
+                    public void onCapabilitiesKnown(boolean liveBitrate) {
+                        updateStreamBitrateLabel();
+                    }
+                });
+        if (prefConfig.autoBitrate) {
+            com.limelight.bitrate.AutoBitrateController auto = new com.limelight.bitrate.AutoBitrateController(
+                    autoCeilingKbps, streamStartKbps,
+                    com.limelight.bitrate.AutoBitrateController.floorKbps(displayWidth, displayHeight, prefConfig.fps),
+                    prefConfig.fps, autoUpHoldMs);
+            auto.setMaxPresentFps(streamDisplayHz);
+            final String key = autoBitrateKey;
+            streamBitrate.enableAuto(auto, new com.limelight.bitrate.StreamBitrateController.StatsSource() {
+                @Override
+                public long[] counters() {
+                    return decoderRenderer != null ? decoderRenderer.getProbeCounters() : null;
+                }
+
+                @Override
+                public int rttMs() {
+                    long info = MoonBridge.getEstimatedRttInfo();
+                    return info == -1 || info == 0 ? 0 : (int) (info >> 32);
+                }
+
+                @Override
+                public long videoBytesReceived() {
+                    return MoonBridge.getVideoBytesReceived();
+                }
+
+                @Override
+                public boolean streamUnobstructed() {
+                    return isStreamUnobstructed();
+                }
+            }, key == null ? null : (limitKbps, upHoldMs) ->
+                    com.limelight.bitrate.AutoBitrateMemory.remember(Game.this, key, limitKbps, upHoldMs));
+        }
+        streamBitrate.start();
+    }
+
+    /**
+     * The stream is shown normally: connected, in the foreground, not in PiP, and no menu,
+     * dialog, loading or reconnect screen over it (any of those takes the window focus).
+     */
+    private boolean isStreamUnobstructed() {
+        if (!connected || isFinishing() || spinner != null) {
+            return false;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && isInPictureInPictureMode()) {
+            return false;
+        }
+        return hasWindowFocus();
+    }
+
+    private void updateStreamBitrateLabel() {
+        if (streamBitrate == null || decoderRenderer == null) {
+            return;
+        }
+        decoderRenderer.setStreamBitrateLabel(streamBitrate.overlayLabel());
+    }
+
+    /** The host changes this stream's bitrate live (Vibepollo /bitrate). */
+    public boolean isLiveBitrateAvailable() {
+        return streamBitrate != null && streamBitrate.isLiveBitrateAvailable();
+    }
+
+    public int getStreamBitrateKbps() {
+        return streamBitrate != null ? streamBitrate.getCurrentKbps() : streamStartKbps;
+    }
+
+    /** The bitrate slider's top for this stream, kbps. */
+    public int getStreamBitrateMaxKbps() {
+        boolean pyrowave = decoderRenderer != null
+                && (decoderRenderer.getActiveVideoFormat() & MoonBridge.VIDEO_FORMAT_MASK_PYROWAVE) != 0;
+        return Math.max(pyrowave ? 1000000 : 150000, Math.max(streamStartKbps, getStreamBitrateKbps()));
+    }
+
+    public void requestStreamBitrate(int kbps) {
+        if (streamBitrate != null) {
+            streamBitrate.request(kbps, "menu", null);
+        }
+    }
+
+    // Resolution hot-switch (PEN-10)
+    private Intent resolutionSwitchIntent;
+
+    private void applyResolutionSwitchOverrides() {
+        String res = getIntent().getStringExtra(EXTRA_RESOLUTION_OVERRIDE);
+        int kbps = getIntent().getIntExtra(EXTRA_BITRATE_OVERRIDE, 0);
+        if (res == null && kbps <= 0) {
+            return;
+        }
+        if (res != null) {
+            int[] wh = parseResolution(res);
+            if (wh != null) {
+                prefConfig.width = wh[0];
+                prefConfig.height = wh[1];
+            }
+        }
+        if (kbps > 0) {
+            prefConfig.bitrate = kbps;
+            prefConfig.meteredBitrate = kbps;
+        }
+        LimeLog.info("Resolution switch: reconnecting at " + prefConfig.width + "x" + prefConfig.height
+                + ", " + prefConfig.bitrate + " kbps");
+    }
+
+    static int[] parseResolution(String value) {
+        int x = value == null ? -1 : value.indexOf('x');
+        if (x <= 0) return null;
+        try {
+            int w = Integer.parseInt(value.substring(0, x).trim());
+            int h = Integer.parseInt(value.substring(x + 1).trim());
+            return w >= 256 && h >= 144 && w <= 8192 && h <= 8192 ? new int[]{w, h} : null;
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    /** The menu can switch resolution: a normal stream on the phone's own screen. */
+    public boolean isResolutionSwitchAvailable() {
+        return connected && !probeMode && !onExternelDisplay && conn != null;
+    }
+
+    public int[] getStreamResolution() {
+        return new int[]{prefConfig.width, prefConfig.height};
+    }
+
+    /** The panel's own resolution, landscape, or null before Android 6. */
+    public int[] getNativeResolution() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return null;
+        Display.Mode mode = getWindowManager().getDefaultDisplay().getMode();
+        int w = mode.getPhysicalWidth(), h = mode.getPhysicalHeight();
+        return new int[]{Math.max(w, h), Math.min(w, h)};
+    }
+
+    /** End this stream (the game keeps running) and reconnect at width x height. */
+    public void switchResolution(int width, int height) {
+        if (!isResolutionSwitchAvailable() || resolutionSwitchIntent != null) {
+            return;
+        }
+        if (width == prefConfig.width && height == prefConfig.height) {
+            return;
+        }
+        // Keep the bitrate the user is streaming at: the auto ceiling when auto runs, since
+        // the current auto rate would become the new stream's ceiling
+        int kbps = 0;
+        if (streamBitrate != null) {
+            kbps = streamBitrate.isAutoRunning() && streamBitrate.getAuto() != null
+                    ? streamBitrate.getAuto().getCeilingKbps() : streamBitrate.getCurrentKbps();
+        }
+        Intent intent = new Intent(getIntent());
+        intent.putExtra(EXTRA_RESOLUTION_OVERRIDE, width + "x" + height);
+        if (kbps > 0) {
+            intent.putExtra(EXTRA_BITRATE_OVERRIDE, kbps);
+        } else {
+            intent.removeExtra(EXTRA_BITRATE_OVERRIDE);
+        }
+        // The app is still running on the host: the new stream resumes it without asking
+        confirmedAppReplacement = true;
+        LimeLog.info("Resolution switch: " + prefConfig.width + "x" + prefConfig.height + " -> "
+                + width + "x" + height + " at " + (kbps > 0 ? kbps + " kbps" : "the saved bitrate")
+                + ", ending this stream and reconnecting");
+        resolutionSwitchIntent = intent;
+        com.limelight.utils.PenumbraToast.makeText(this,
+                getResources().getString(R.string.resolution_switching, width + "x" + height),
+                Toast.LENGTH_SHORT).show();
+        // Disconnect, not quit: the game keeps running and the new stream resumes it.
+        // Game is singleTask, so the new stream starts from onDestroy once this one is gone.
+        disconnect();
+    }
+
+    private void startResolutionSwitch() {
+        Intent intent = resolutionSwitchIntent;
+        resolutionSwitchIntent = null;
+        if (intent == null) {
+            return;
+        }
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        try {
+            getApplicationContext().startActivity(intent);
+            LimeLog.info("Resolution switch: new stream activity started");
+        } catch (RuntimeException e) {
+            LimeLog.warning("Resolution switch: could not start the new stream: " + e);
+        }
     }
 
     public void disconnect() {

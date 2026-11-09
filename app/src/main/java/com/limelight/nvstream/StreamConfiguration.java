@@ -17,6 +17,7 @@ public class StreamConfiguration {
     private boolean virtualDisplay;
     private int resolutionScaleFactor;
     private int clientRefreshRateX100;
+    private int clientRefreshRateUhz;
     private int bitrate;
     private boolean sops;
     private boolean enableAdaptiveResolution;
@@ -31,6 +32,9 @@ public class StreamConfiguration {
     private int colorSpace;
     private boolean persistGamepadsAfterDisconnect;
     private boolean enableUltraLowLatency;
+    // A recovery attempt: only resume the app already running, never launch or quit one
+    private boolean resumeOnly;
+    private int pyrowavePaceMbps;
 
     public static class Builder {
         private StreamConfiguration config = new StreamConfiguration();
@@ -116,6 +120,12 @@ public class StreamConfiguration {
             return this;
         }
 
+        /** PyroWave frame pace for the host (x-ss-video[0].pyrowavePaceMbps); 0 leaves it to the host. */
+        public StreamConfiguration.Builder setPyrowavePaceMbps(int paceMbps) {
+            config.pyrowavePaceMbps = paceMbps;
+            return this;
+        }
+
         public StreamConfiguration.Builder setClientRefreshRateX100(int refreshRateX100) {
             config.clientRefreshRateX100 = refreshRateX100;
             return this;
@@ -146,6 +156,11 @@ public class StreamConfiguration {
             return this;
         }
 
+        public StreamConfiguration.Builder setResumeOnly(boolean resumeOnly) {
+            config.resumeOnly = resumeOnly;
+            return this;
+        }
+
         public StreamConfiguration build() {
             return config;
         }
@@ -171,6 +186,10 @@ public class StreamConfiguration {
         this.enableUltraLowLatency = false;
     }
     
+    public boolean getResumeOnly() {
+        return resumeOnly;
+    }
+
     public int getWidth() {
         return width;
     }
@@ -243,8 +262,26 @@ public class StreamConfiguration {
         return persistGamepadsAfterDisconnect;
     }
 
+    public int getPyrowavePaceMbps() {
+        return pyrowavePaceMbps;
+    }
+
     public int getClientRefreshRateX100() {
         return clientRefreshRateX100;
+    }
+
+    // Set once the display's refresh rate has been measured, before the connection starts
+    public void setClientRefreshRateX100(int refreshRateX100) {
+        clientRefreshRateX100 = refreshRateX100;
+    }
+
+    // The same rate in microhertz, or 0 when it's only known to hundredths
+    public int getClientRefreshRateUhz() {
+        return clientRefreshRateUhz;
+    }
+
+    public void setClientRefreshRateUhz(int refreshRateUhz) {
+        clientRefreshRateUhz = refreshRateUhz;
     }
 
     public int getColorRange() {

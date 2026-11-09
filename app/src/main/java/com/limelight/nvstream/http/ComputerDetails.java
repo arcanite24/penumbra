@@ -86,6 +86,12 @@ public class ComputerDetails {
     public boolean vDisplaySupported = false;
     public boolean vDisplayDriverReady = false;
 
+    // Vibepollo extensions (0 when the host doesn't advertise them)
+    public int hardwareMetricsVersion;
+    public int powerActionVersion;
+    public boolean sleepSupported;
+    public boolean sleepAllowed;
+
     // Server commands
     public List<String> serverCommands;
 
@@ -163,6 +169,11 @@ public class ComputerDetails {
 
         this.vDisplayDriverReady = details.vDisplayDriverReady;
         this.vDisplaySupported = details.vDisplaySupported;
+
+        this.hardwareMetricsVersion = details.hardwareMetricsVersion;
+        this.powerActionVersion = details.powerActionVersion;
+        this.sleepSupported = details.sleepSupported;
+        this.sleepAllowed = details.sleepAllowed;
 
         this.serverCommands = details.serverCommands;
     }

@@ -33,6 +33,14 @@
     <string name="pcview_menu_delete_pc">Delete PC</string>
     <string name="pcview_menu_test_network">Test Network Connection</string>
     <string name="pcview_menu_details">View Details</string>
+    <string name="pcview_menu_sleep">Sleep PC</string>
+    <string name="sleep_confirm_title">Put the PC to sleep?</string>
+    <string name="sleep_confirm_message">%1$s will go to sleep. Wake it again with Wake-on-LAN or its power button.</string>
+    <string name="sleep_confirm_yes">Sleep</string>
+    <string name="sleep_requested">Asked %1$s to sleep</string>
+    <string name="sleep_busy">The PC can\'t sleep while an app or stream is running. Quit it first.</string>
+    <string name="sleep_not_allowed">Sleep isn\'t allowed for this device. Allow it for this client in the host\'s web UI.</string>
+    <string name="sleep_failed">Sleep request failed: %1$s</string>
     <string name="pcview_menu_eol">NVIDIA GameStream End-of-Service</string>
     <string name="pcview_menu_open_management_page">Go to Server Config</string>
     <string name="pcview_error_no_management_url">Cannot open server config page, cannot find server address.</string>
@@ -132,6 +140,20 @@
     <string name="perf_overlay_hostprocessinglatency">Host processing latency min/max/average: %1$.1f/%2$.1f/%3$.1f ms</string>
     <string name="perf_overlay_netdrops">Frames dropped by your network connection: %1$.2f%%</string>
     <string name="perf_overlay_netlatency">Average network latency: %1$d ms (variance: %2$d ms)</string>
+    <!-- Capture latency. The last argument is perf_overlay_latency_synced or perf_overlay_latency_estimated. -->
+    <string name="perf_overlay_capture_latency">Capture to decoded/present: %1$.1f/%2$.1f ms %3$s</string>
+    <string name="perf_overlay_capture_to_decoded">Capture to decoded: %1$.1f ms %2$s</string>
+    <string name="perf_overlay_lite_capture_to_present">Capture→present: %1$.1f ms %2$s</string>
+    <string name="perf_overlay_host_metrics_prefix">Host:</string>
+    <string name="perf_overlay_host_cpu">CPU %1$.0f%%</string>
+    <string name="perf_overlay_host_gpu">GPU %1$.0f%%</string>
+    <string name="perf_overlay_host_encoder">encoder %1$.0f%%</string>
+    <string name="perf_overlay_host_temperature">%1$.0f °C</string>
+    <string name="perf_overlay_host_vram">VRAM %1$.1f GB</string>
+    <string name="perf_overlay_host_metrics_none">no readings</string>
+    <string name="perf_overlay_lite_capture_to_decoded">Capture→decoded: %1$.1f ms %2$s</string>
+    <string name="perf_overlay_latency_synced">(clock sync)</string>
+    <string name="perf_overlay_latency_estimated">(est.)</string>
     <string name="perf_overlay_dectime">Average decoding time: %1$.2f ms</string>
     <string name="perf_overlay_drawdelay"> Delay: %1$.2f ms</string>
 
@@ -290,6 +312,39 @@
     <string name="category_host_settings">Host Settings</string>
     <string name="title_checkbox_enable_sops">Optimize game settings</string>
     <string name="summary_checkbox_enable_sops">Allow GFE to modify game settings for optimal streaming</string>
+    <string name="title_checkbox_auto_recover_stream">Reconnect automatically</string>
+    <string name="summary_checkbox_auto_recover_stream">After a brief network dropout, reconnect to the game that\'s still running on the host, up to 5 times within a minute. Never starts or quits an app.</string>
+    <string name="recovery_title">Connection lost</string>
+    <string name="recovery_countdown">Reconnecting to %1$s in %2$d s (attempt %3$d of %4$d)</string>
+    <string name="recovery_reconnecting">Reconnecting (attempt %1$d of %2$d)</string>
+    <string name="recovery_done">Reconnected</string>
+    <string name="stall_rhythm_notice">Stutters repeat about every %1$s, the pattern of background Wi-Fi scans. Turning off Wi-Fi scanning in Location settings may help.</string>
+    <string name="wifi_unavailable">Wi-Fi: no reading</string>
+    <string name="wifi_link_none">Network: none</string>
+    <string name="wifi_link_ethernet">Network: Ethernet</string>
+    <string name="wifi_link_cellular">Network: mobile data</string>
+    <string name="wifi_link_other">Network: VPN or other</string>
+    <string name="wifi_band_24">2.4 GHz</string>
+    <string name="wifi_band_5">5 GHz</string>
+    <string name="wifi_band_6">6 GHz</string>
+    <string name="wifi_line_band">Wi-Fi %1$s, channel %2$s, %3$s MHz wide</string>
+    <string name="wifi_signal_unknown">signal unknown</string>
+    <string name="wifi_line_signal">%1$d dBm (%2$s)</string>
+    <string name="wifi_signal_excellent">excellent</string>
+    <string name="wifi_signal_good">good</string>
+    <string name="wifi_signal_fair">fair</string>
+    <string name="wifi_signal_weak">weak</string>
+    <string name="wifi_line_speed">tx/rx %1$s/%2$s Mbps</string>
+    <string name="wifi_line_speed_single">link %1$s Mbps</string>
+    <string name="wifi_standard_legacy">legacy Wi-Fi</string>
+    <string name="wifi_standard_6e">Wi-Fi 6E</string>
+    <string name="wifi_standard">Wi-Fi %1$d</string>
+    <string name="wifi_lock_held">low-latency lock</string>
+    <string name="wifi_warn_24">2.4 GHz is slow and crowded; use 5 or 6 GHz if you can</string>
+    <string name="wifi_warn_weak">Weak signal; move closer to the access point</string>
+    <string name="wifi_line_rhythm">Stalls repeat every %1$s (likely Wi-Fi scans)</string>
+    <string name="wifi_period_seconds">%1$d s</string>
+    <string name="wifi_period_minutes">%1$s min</string>
     <string name="title_checkbox_host_audio">Play audio on PC</string>
     <string name="summary_checkbox_host_audio">Play audio from the computer and this device</string>
 
@@ -330,6 +385,9 @@
     <!-- Toasts -->
     <string name="toast_controller_type_changed">Gamepad type may be changed due to motion sensor emulation</string>
 
+    <!-- Permission justification -->
+    <string name="local_network_rationale">Penumbra requires local network permissions to communicate with nearby hosts</string>
+
     <!-- Array strings -->
     <string name="resolution_360p">360p</string>
     <string name="resolution_480p">480p</string>
@@ -351,6 +409,29 @@
     <string name="videoformat_av1always">Prefer AV1 (Experimental)</string>
     <string name="videoformat_hevcalways">Prefer HEVC</string>
     <string name="videoformat_h264always">Prefer H.264</string>
+    <string name="videoformat_pyrowave">PyroWave (fast wired or Wi-Fi 6 LAN)</string>
+    <string name="category_pyrowave_settings">PyroWave</string>
+    <string name="summary_pyrowave_info">PyroWave is a GPU wavelet codec for fast local networks: every frame stands alone, so lost packets never freeze the picture. Choose it under Video codec. It needs a host that offers it (Vibepollo does), 64-bit Android 10+ with Vulkan 1.1, and a lot of bandwidth: about 220 Mbps for 1080p60 and 440 Mbps for 1080p120.</string>
+    <string name="title_pyrowave_late_frames">Late frames</string>
+    <string name="summary_pyrowave_late_frames">What to do with a frame still arriving when it should be shown. Showing it with its finest detail missing keeps motion smooth; waiting for it keeps every frame sharp.</string>
+    <string name="pyrowave_late_frames_off">Wait for the whole frame</string>
+    <string name="pyrowave_late_frames_balanced">Balanced</string>
+    <string name="pyrowave_late_frames_smooth">Smoothest (show it on time)</string>
+    <string name="title_pyrowave_front_buffer">Front buffer rendering</string>
+    <string name="summary_pyrowave_front_buffer">Draw each frame straight into the buffer the screen is reading, timed to each scan of the screen from the host frame times, for the lowest latency. For PyroWave, and for other codecs with the Vulkan renderer on. Replaces Frame pacing there; Lowest latency keeps the smallest buffer. Falls back to the normal swapchain if the device has no front buffer.</string>
+    <string name="title_pyrowave_gpu_boost">Keep the GPU clock up</string>
+    <string name="summary_pyrowave_gpu_boost">Keep the GPU lightly busy between frames so decoding and drawing never wait for it to clock up. For PyroWave, and for other codecs with the Vulkan renderer on. Uses more battery.</string>
+    <string name="category_vulkan_renderer_settings">Vulkan renderer</string>
+    <string name="title_vulkan_renderer">Vulkan renderer for H.264, HEVC and AV1</string>
+    <string name="summary_vulkan_renderer">Decode with MediaCodec as usual, then pace and present the frames with the Vulkan renderer PyroWave uses: host-timed pacing, front buffer rendering and upscaling. Experimental. Falls back to the normal renderer if it cannot start. PyroWave always uses it.</string>
+    <string name="title_vulkan_upscaler">Upscaling</string>
+    <string name="summary_vulkan_upscaler">Scale a stream smaller than the screen up to it on the GPU, for example 720p or 900p on a 1080p screen, to save bandwidth and decode time. FSR 1 is sharper, Snapdragon GSR is lighter. Needs the Vulkan renderer (or PyroWave). Works with HDR, on the HDR10 signal.</string>
+    <string name="vulkan_upscaler_off">Off</string>
+    <string name="vulkan_upscaler_fsr">AMD FSR 1</string>
+    <string name="vulkan_upscaler_sgsr">Snapdragon GSR</string>
+    <string name="toast_vulkan_fallback">The Vulkan renderer could not start, so the normal renderer is used</string>
+    <string name="toast_vulkan_front_buffer_unavailable">This device has no front buffer for the Vulkan renderer, so frames go through the normal swapchain</string>
+    <string name="perf_overlay_renderer">Renderer: %1$s</string>
 
     <string name="title_frame_pacing">Video frame pacing</string>
     <string name="summary_frame_pacing">Specify how to balance video latency and smoothness</string>
@@ -448,6 +529,10 @@
     <string name="summary_checkbox_multi_touch_gestures">Enable 3 finger tap for keyboard, 4 finger tap for full keyboard, 5 finger tap for quick menu when using multi-touch mode.</string>
     <string name="title_checkbox_onscreen_style_official">Official Virtual Gamepad Skin</string>
     <string name="summary_checkbox_onscreen_style_official">If you still like the old style of official virtual gamepad buttons, you can select this option.\nButton shapes can be square if you selected the bottom virtual button [Normal buttons are square buttons]</string>
+    <string name="title_checkbox_perf_overlay_latency">Show total latency</string>
+    <string name="title_checkbox_perf_overlay_host_metrics">Show host hardware load</string>
+    <string name="summary_checkbox_perf_overlay_host_metrics">Show the host\'s CPU, GPU, encoder load, GPU temperature and VRAM. Needs a Vibepollo host with hardware metrics turned on; checked every few seconds.</string>
+    <string name="summary_checkbox_perf_overlay_latency">Show the time from the host capturing a frame until it\'s decoded and until it\'s on screen. Exact with hosts that answer clock sync; otherwise estimated from half the round trip.</string>
     <string name="title_checkbox_enable_perf_overlay_lite">Enable Lite mode</string>
     <string name="summary_checkbox_enable_perf_overlay_lite">Display simplified performance information: Network Speed / Latency / Decode / Packet Loss Rate / FPS</string>
     <string name="title_checkbox_enable_perf_logging">Enable Performance Logging</string>
@@ -812,4 +897,29 @@
     <string name="app_replace_message">The host is still running another app. Close it and start %1$s?</string>
     <string name="app_replace_confirm">Close and start</string>
     <string name="app_replace_waiting">Switching apps…</string>
+
+    <!-- Live bitrate (PEN-10) -->
+    <string name="perf_overlay_bitrate">Bitrate: %1$s</string>
+    <string name="game_menu_bitrate">Bitrate · %1$s</string>
+    <string name="game_menu_resolution">Resolution · %1$s</string>
+    <string name="resolution_menu_title">Stream resolution (reconnects)</string>
+    <string name="resolution_native_option">Native (%1$s)</string>
+    <string name="resolution_current_option">%1$s (current)</string>
+    <string name="resolution_switching">Reconnecting at %1$s…</string>
+    <string name="bitrate_dialog_title">Stream bitrate</string>
+    <string name="bitrate_dialog_message">The host changes the bitrate without restarting the stream. It may cap it at its own limit.</string>
+    <string name="bitrate_dialog_apply">Apply</string>
+    <string name="bitrate_applied">Bitrate set to %1$s</string>
+    <string name="bitrate_failed">Couldn\'t change the bitrate: %1$s</string>
+    <string name="title_auto_bitrate">Automatic bitrate</string>
+    <string name="summary_auto_bitrate">Lowers the bitrate when frames get lost and raises it again after a clean minute, never above the bitrate set here. Needs a host that changes the bitrate live (Vibepollo), and stays off if the host adapts the bitrate itself. The limit is remembered for each network.</string>
+    <string name="title_decoder_input_buffer">Decoder input buffer</string>
+    <string name="summary_decoder_input_buffer">Size of the buffer each compressed frame is copied into. Automatic asks for a buffer that fits high-bitrate frames and grows it if a frame doesn\'t fit. Off keeps the decoder\'s own size.</string>
+    <string name="decoder_input_buffer_auto">Automatic</string>
+    <string name="decoder_input_buffer_force">Always request</string>
+    <string name="decoder_input_buffer_off">Off (decoder default)</string>
+    <string name="title_pyrowave_pace">PyroWave frame pace</string>
+    <string name="summary_pyrowave_pace">How fast the host sends each frame\'s packets. The Tune wizard measures it with the host\'s UDP burst test; 0 leaves it to the host.</string>
+    <string name="suffix_pyrowave_pace">Mbps</string>
+    <string name="bitrate_auto_down">Network busy: bitrate lowered to %1$s</string>
 </resources>

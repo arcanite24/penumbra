@@ -47,7 +47,8 @@ public final class SettingsSectionRail {
 
     private static final Section[] SECTIONS = {
             new Section(R.string.section_stream, R.string.section_stream_sub, R.drawable.ic_section_stream,
-                    "category_video_settings", "category_video_tuning"),
+                    "category_video_settings", "category_pyrowave_settings", "category_vulkan_renderer_settings",
+                    "category_video_tuning"),
             new Section(R.string.section_audio, R.string.section_audio_sub, R.drawable.ic_section_audio,
                     "category_audio_settings"),
             new Section(R.string.section_controllers, R.string.section_controllers_sub, R.drawable.ic_section_controllers,

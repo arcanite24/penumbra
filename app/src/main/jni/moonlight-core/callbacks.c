@@ -1,7 +1,13 @@
 #include <jni.h>
 
+#include <dirent.h>
 #include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/prctl.h>
+#include <sys/resource.h>
+#include <sys/system_properties.h>
 
 #include <Limelight.h>
 
@@ -9,6 +15,11 @@
 #include <android/log.h>
 
 #include <cpu-features.h>
+
+// Matches MoonBridge.PARTIAL_KIND_*
+#define PARTIAL_KIND_NONE 0
+#define PARTIAL_KIND_LOST 1 // Packets were lost
+#define PARTIAL_KIND_CUT 2  // Cut short at its deadline (see LiSetPartialFrameDeadline())
 
 static OpusMSDecoder* Decoder;
 static OPUS_MULTISTREAM_CONFIGURATION OpusConfig;
@@ -68,8 +79,15 @@ JNIEnv* GetThreadEnv(void) {
     if (env)
         return env;
 
-    // This is the thread's first JNI call, so attach now
-    (*JVM)->AttachCurrentThread(JVM, &env, NULL);
+    // This is the thread's first JNI call, so attach now. Attached without a name, the VM
+    // renames the thread "Thread-N", losing the name moonlight-common-c gave it (which
+    // RaiseVideoThreadPriorities() looks for, and which traces and top show).
+    char name[17] = "";
+    JavaVMAttachArgs args = {JNI_VERSION_1_6, NULL, NULL};
+    if (prctl(PR_GET_NAME, name) == 0 && name[0] != 0) {
+        args.name = name;
+    }
+    (*JVM)->AttachCurrentThread(JVM, &env, &args);
 
     // Write our JNIEnv to TLS, so we detach before dying
     pthread_setspecific(JniEnvKey, env);
@@ -85,7 +103,7 @@ Java_com_limelight_nvstream_jni_MoonBridge_init(JNIEnv *env, jclass clazz) {
     BridgeDrStartMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeDrStart", "()V");
     BridgeDrStopMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeDrStop", "()V");
     BridgeDrCleanupMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeDrCleanup", "()V");
-    BridgeDrSubmitDecodeUnitMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeDrSubmitDecodeUnit", "([BIIIICJJ)I");
+    BridgeDrSubmitDecodeUnitMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeDrSubmitDecodeUnit", "([BIIIICJJJ[I[II)I");
     BridgeArInitMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeArInit", "(III)I");
     BridgeArStartMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeArStart", "()V");
     BridgeArStopMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeArStop", "()V");
@@ -104,9 +122,67 @@ Java_com_limelight_nvstream_jni_MoonBridge_init(JNIEnv *env, jclass clazz) {
     BridgeClSetControllerLEDMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClSetControllerLED", "(SBBB)V");
 }
 
+// Whether this stream's video threads have been raised yet (RaiseVideoThreadPriorities())
+static volatile int VideoThreadsRaised;
+
+// moonlight-common-c's threads that receive video and feed it to the decoder run at normal
+// priority, where a busy device can hold them up for milliseconds: frames then arrive later and
+// less evenly, and the jitter buffer grows to cover it. They get the renderer's priority (-8,
+// ANDROID_PRIORITY_URGENT_DISPLAY, or -4 if that's refused). They're found by the names
+// moonlight-common-c gives them, once the first frame shows they're running. From Moonlight X
+// (92653b3ce). To compare without it: adb shell setprop debug.moonlight.video_thread_priority default
+static void RaiseVideoThreadPriorities(void) {
+    char mode[PROP_VALUE_MAX] = "";
+    __system_property_get("debug.moonlight.video_thread_priority", mode);
+    if (strcmp(mode, "default") == 0) {
+        __android_log_print(ANDROID_LOG_INFO, "moonlight-core", "Video threads left at their priority");
+        return;
+    }
+
+    DIR* tasks = opendir("/proc/self/task");
+    if (!tasks) {
+        return;
+    }
+
+    struct dirent* entry;
+    while ((entry = readdir(tasks)) != NULL) {
+        int tid = atoi(entry->d_name);
+        if (tid <= 0) {
+            continue;
+        }
+
+        char path[64];
+        char name[32] = "";
+        snprintf(path, sizeof(path), "/proc/self/task/%d/comm", tid);
+        FILE* comm = fopen(path, "r");
+        if (!comm) {
+            continue;
+        }
+        if (!fgets(name, sizeof(name), comm)) {
+            name[0] = 0;
+        }
+        fclose(comm);
+        name[strcspn(name, "\n")] = 0;
+
+        if (strcmp(name, "VideoRecv") != 0 && strcmp(name, "VideoDec") != 0) {
+            continue;
+        }
+        if (setpriority(PRIO_PROCESS, tid, -8) != 0 && setpriority(PRIO_PROCESS, tid, -4) != 0) {
+            __android_log_print(ANDROID_LOG_WARN, "moonlight-core", "Could not raise the %s thread's priority", name);
+        }
+        else {
+            __android_log_print(ANDROID_LOG_INFO, "moonlight-core", "%s thread (tid %d) priority %d", name, tid,
+                                getpriority(PRIO_PROCESS, tid));
+        }
+    }
+    closedir(tasks);
+}
+
 int BridgeDrSetup(int videoFormat, int width, int height, int redrawRate, void* context, int drFlags) {
     JNIEnv* env = GetThreadEnv();
     int err;
+
+    VideoThreadsRaised = 0;
 
     err = (*env)->CallStaticIntMethod(env, GlobalBridgeClass, BridgeDrSetupMethod, videoFormat, width, height, redrawRate);
     if ((*env)->ExceptionCheck(env)) {
@@ -147,6 +223,11 @@ int BridgeDrSubmitDecodeUnit(PDECODE_UNIT decodeUnit) {
     JNIEnv* env = GetThreadEnv();
     int ret;
 
+    if (!VideoThreadsRaised) {
+        VideoThreadsRaised = 1;
+        RaiseVideoThreadPriorities();
+    }
+
     // Increase the size of our frame data buffer if our frame won't fit
     if ((*env)->GetArrayLength(env, DecodedFrameBuffer) < decodeUnit->fullLength) {
         (*env)->DeleteGlobalRef(env, DecodedFrameBuffer);
@@ -156,11 +237,60 @@ int BridgeDrSubmitDecodeUnit(PDECODE_UNIT decodeUnit) {
     PLENTRY currentEntry;
     int offset;
 
+    // Whether, and how, the frame is partial (MoonBridge.PARTIAL_KIND_*). A frame cut short at
+    // its deadline may have no gaps: it can end where a block of its packets did.
+    const jint partialKind = !decodeUnit->partialFrame ? PARTIAL_KIND_NONE :
+                             decodeUnit->partialLate ? PARTIAL_KIND_CUT : PARTIAL_KIND_LOST;
+
+    // A partial frame's gaps, as offset and length pairs into the frame data, and in record
+    // framing where records start in it (an empty array if nowhere but the frame's start)
+    jintArray missingRanges = NULL;
+    jint* missing = NULL;
+    int missingCount = 0;
+    jintArray recordStartOffsets = NULL;
+    jint* recordStarts = NULL;
+    int recordStartCount = 0;
+    if (decodeUnit->partialFrame) {
+        for (currentEntry = decodeUnit->bufferList; currentEntry != NULL; currentEntry = currentEntry->next) {
+            if (currentEntry->bufferType == BUFFER_TYPE_MISSING) {
+                missingCount++;
+            }
+            else if (currentEntry->bufferType == BUFFER_TYPE_RECORD_START) {
+                recordStartCount++;
+            }
+        }
+        if (missingCount != 0) {
+            missing = malloc(sizeof(*missing) * 2 * missingCount);
+            if (missing == NULL) {
+                return DR_OK;
+            }
+            missingCount = 0;
+        }
+        if (decodeUnit->partialRecords) {
+            // At least one, so it's never NULL
+            recordStarts = malloc(sizeof(*recordStarts) * (recordStartCount + 1));
+            if (recordStarts == NULL) {
+                free(missing);
+                return DR_OK;
+            }
+            recordStartCount = 0;
+        }
+    }
+
     currentEntry = decodeUnit->bufferList;
     offset = 0;
     while (currentEntry != NULL) {
+        if (currentEntry->bufferType == BUFFER_TYPE_MISSING) {
+            // Nothing to copy: the gap is left as it is in the buffer
+            if (missing != NULL) {
+                missing[missingCount * 2] = offset;
+                missing[missingCount * 2 + 1] = currentEntry->length;
+                missingCount++;
+            }
+            offset += currentEntry->length;
+        }
         // Submit parameter set NALUs separately from picture data
-        if (currentEntry->bufferType != BUFFER_TYPE_PICDATA) {
+        else if (currentEntry->bufferType != BUFFER_TYPE_PICDATA && currentEntry->bufferType != BUFFER_TYPE_RECORD_START) {
             // Use the beginning of the buffer each time since this is a separate
             // invocation of the decoder each time.
             (*env)->SetByteArrayRegion(env, DecodedFrameBuffer, 0, currentEntry->length, (jbyte*)currentEntry->data);
@@ -168,17 +298,25 @@ int BridgeDrSubmitDecodeUnit(PDECODE_UNIT decodeUnit) {
             ret = (*env)->CallStaticIntMethod(env, GlobalBridgeClass, BridgeDrSubmitDecodeUnitMethod,
                                               DecodedFrameBuffer, currentEntry->length, currentEntry->bufferType,
                                               decodeUnit->frameNumber, decodeUnit->frameType, (jchar)decodeUnit->frameHostProcessingLatency,
-                                              (jlong)decodeUnit->receiveTimeMs, (jlong)decodeUnit->enqueueTimeMs);
+                                              (jlong)decodeUnit->receiveTimeUs, (jlong)decodeUnit->enqueueTimeUs, (jlong)decodeUnit->presentationTimeUs,
+                                              NULL, NULL, PARTIAL_KIND_NONE);
             if ((*env)->ExceptionCheck(env)) {
                 // We will crash here
+                free(missing);
+                free(recordStarts);
                 (*JVM)->DetachCurrentThread(JVM);
                 return DR_OK;
             }
             else if (ret != DR_OK) {
+                free(missing);
+                free(recordStarts);
                 return ret;
             }
         }
         else {
+            if (recordStarts != NULL && currentEntry->bufferType == BUFFER_TYPE_RECORD_START) {
+                recordStarts[recordStartCount++] = offset;
+            }
             (*env)->SetByteArrayRegion(env, DecodedFrameBuffer, offset, currentEntry->length, (jbyte*)currentEntry->data);
             offset += currentEntry->length;
         }
@@ -186,10 +324,45 @@ int BridgeDrSubmitDecodeUnit(PDECODE_UNIT decodeUnit) {
         currentEntry = currentEntry->next;
     }
 
+    if (missing != NULL) {
+        missingRanges = (*env)->NewIntArray(env, missingCount * 2);
+        if (missingRanges != NULL) {
+            (*env)->SetIntArrayRegion(env, missingRanges, 0, missingCount * 2, missing);
+        }
+        free(missing);
+        if (missingRanges == NULL) {
+            // Without the gaps the frame can't be read
+            (*env)->ExceptionClear(env);
+            free(recordStarts);
+            return DR_OK;
+        }
+    }
+    if (recordStarts != NULL) {
+        recordStartOffsets = (*env)->NewIntArray(env, recordStartCount);
+        if (recordStartOffsets != NULL) {
+            (*env)->SetIntArrayRegion(env, recordStartOffsets, 0, recordStartCount, recordStarts);
+        }
+        free(recordStarts);
+        if (recordStartOffsets == NULL) {
+            (*env)->ExceptionClear(env);
+            if (missingRanges != NULL) {
+                (*env)->DeleteLocalRef(env, missingRanges);
+            }
+            return DR_OK;
+        }
+    }
+
     ret = (*env)->CallStaticIntMethod(env, GlobalBridgeClass, BridgeDrSubmitDecodeUnitMethod,
                                        DecodedFrameBuffer, offset, BUFFER_TYPE_PICDATA,
                                        decodeUnit->frameNumber, decodeUnit->frameType, (jchar)decodeUnit->frameHostProcessingLatency,
-                                       (jlong)decodeUnit->receiveTimeMs, (jlong)decodeUnit->enqueueTimeMs);
+                                       (jlong)decodeUnit->receiveTimeUs, (jlong)decodeUnit->enqueueTimeUs, (jlong)decodeUnit->presentationTimeUs,
+                                       missingRanges, recordStartOffsets, partialKind);
+    if (missingRanges != NULL) {
+        (*env)->DeleteLocalRef(env, missingRanges);
+    }
+    if (recordStartOffsets != NULL) {
+        (*env)->DeleteLocalRef(env, recordStartOffsets);
+    }
     if ((*env)->ExceptionCheck(env)) {
         // We will crash here
         (*JVM)->DetachCurrentThread(JVM);
@@ -458,10 +631,11 @@ Java_com_limelight_nvstream_jni_MoonBridge_startConnection(JNIEnv *env, jclass c
                                                            jint width, jint height, jint fps,
                                                            jint bitrate, jint packetSize, jint streamingRemotely,
                                                            jint audioConfiguration, jint supportedVideoFormats,
-                                                           jint clientRefreshRateX100,
+                                                           jint clientRefreshRateX100, jint clientRefreshRateUhz,
                                                            jbyteArray riAesKey, jbyteArray riAesIv,
                                                            jint videoCapabilities,
-                                                           jint colorSpace, jint colorRange) {
+                                                           jint colorSpace, jint colorRange,
+                                                           jint pyrowavePaceMbps) {
     SERVER_INFORMATION serverInfo = {
             .address = (*env)->GetStringUTFChars(env, address, 0),
             .serverInfoAppVersion = (*env)->GetStringUTFChars(env, appVersion, 0),
@@ -479,9 +653,13 @@ Java_com_limelight_nvstream_jni_MoonBridge_startConnection(JNIEnv *env, jclass c
             .audioConfiguration = audioConfiguration,
             .supportedVideoFormats = supportedVideoFormats,
             .clientRefreshRateX100 = clientRefreshRateX100,
+            .clientRefreshRateUhz = clientRefreshRateUhz,
             .encryptionFlags = ENCFLG_AUDIO,
             .colorSpace = colorSpace,
-            .colorRange = colorRange
+            .colorRange = colorRange,
+            // 0 would turn FEC off: -1 leaves it to the host, as LiInitializeStreamConfiguration() does
+            .fecPercentage = -1,
+            .pyrowavePaceMbps = pyrowavePaceMbps
     };
 
     jbyte* riAesKeyBuf = (*env)->GetByteArrayElements(env, riAesKey, NULL);

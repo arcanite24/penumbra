@@ -44,6 +44,8 @@ public class WizardReport {
     public boolean av1Main10;
     public String avcDecoder;
     public int hevcMaxFps1080;
+    /** The device can decode PyroWave (64-bit, Android 10+, Vulkan 1.1; PEN-9). */
+    public boolean pyrowaveDecoder;
 
     // Network link
     public static final int LINK_NONE = 0;
@@ -91,6 +93,62 @@ public class WizardReport {
     public static final long SCM_HEVC_MAIN10 = 0x00000200;
     public static final long SCM_AV1_MAIN8 = 0x00010000;
     public static final long SCM_AV1_MAIN10 = 0x00020000;
+    // Vibepollo's PyroWave bits (docs/pyrowave-protocol.md)
+    public static final long SCM_PYROWAVE = 0x00800000;
+    public static final long SCM_PYROWAVE_10BIT = 0x02000000;
+
+    public boolean hostPyrowave() {
+        return (hostCodecModes & SCM_PYROWAVE) != 0;
+    }
+
+    public boolean hostPyrowave10() {
+        return (hostCodecModes & SCM_PYROWAVE_10BIT) != 0;
+    }
+
+    // Vibepollo's UDP burst calibration (PEN-10), advertised in paired serverinfo
+    public int hostUdpProbeVersion;
+    public boolean hostUdpHandshake;
+    public boolean hostUdpBurst;
+    /** The host's routed wired link, Mbps; 0 when wireless, virtual or unknown. */
+    public int hostLinkMbps;
+    /** The UDP probe ran to the end (passed or not). */
+    public boolean udpProbeRan;
+    /** Highest rate that passed the UDP probe twice, kbps; 0 when none did. */
+    public int udpCapacityKbps;
+    /** Highest frame pace that passed, kbps; 0 when not measured (the host keeps its default). */
+    public int udpPaceKbps;
+    /** Why the probe gave no rate, or the last result's detail. */
+    public String udpNote;
+
+    /** The UDP probe measured a rate: it replaces the link-speed guess. */
+    public boolean udpMeasured() {
+        return udpProbeRan && udpCapacityKbps > 0;
+    }
+
+    /**
+     * The most a PyroWave stream should use, kbps: 90% of the measured UDP capacity when the probe
+     * found a clean rate, otherwise (no probe, or no clean rate) two thirds of the link speed.
+     * 0 when PyroWave shouldn't be used.
+     */
+    public int pyrowaveBudgetKbps() {
+        if (udpMeasured()) {
+            return (int) (udpCapacityKbps * 0.9);
+        }
+        return (int) (pyrowaveLinkMbps() * 1000 * 0.65);
+    }
+
+    /**
+     * Megabits per second the link to the host can carry for a PyroWave stream, or 0 when it's too
+     * slow or unknown. Ethernet links are assumed to be gigabit. A UDP probe result wins.
+     */
+    public int pyrowaveLinkMbps() {
+        if (!hostOnLan || place == PLACE_REMOTE) return 0;
+        // A probe that found no clean rate doesn't disqualify PyroWave: the link-speed rule applies
+        if (udpMeasured()) return udpCapacityKbps / 1000;
+        if (link == LINK_ETHERNET) return 1000;
+        if (link == LINK_WIFI && wifiFreqMhz >= 4900 && wifiLinkMbps >= 600 && wifiRssi >= -62) return wifiLinkMbps;
+        return 0;
+    }
 
     public boolean hostHevc() {
         // Old GFE builds don't report modes but always support HEVC

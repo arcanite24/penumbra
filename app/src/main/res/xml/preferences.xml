@@ -27,7 +27,7 @@
         <com.limelight.preferences.SeekBarPreference
             android:dialogMessage="@string/summary_seekbar_bitrate"
             android:key="seekbar_bitrate_kbps"
-            android:max="300000"
+            android:max="1000000"
             android:summary="@string/summary_seekbar_bitrate"
             android:text="@string/suffix_seekbar_bitrate_mbps"
             android:title="@string/title_seekbar_bitrate"
@@ -50,6 +50,12 @@
             seekbar:step="500" />
         <CheckBoxPreference
             android:defaultValue="false"
+            android:key="checkbox_auto_bitrate"
+            android:summary="@string/summary_auto_bitrate"
+            android:title="@string/title_auto_bitrate"
+            app:iconSpaceReserved="false" />
+        <CheckBoxPreference
+            android:defaultValue="false"
             android:key="checkbox_enable_hdr"
             android:summary="@string/summary_enable_hdr"
             android:title="@string/title_enable_hdr"
@@ -70,6 +76,79 @@
             android:summary="@string/summary_frame_pacing"
             android:title="@string/title_frame_pacing"
             app:iconSpaceReserved="false" />
+        <ListPreference
+            android:defaultValue="auto"
+            android:entries="@array/decoder_input_buffer_names"
+            android:entryValues="@array/decoder_input_buffer_values"
+            android:key="decoder_input_buffer"
+            android:summary="@string/summary_decoder_input_buffer"
+            android:title="@string/title_decoder_input_buffer"
+            app:iconSpaceReserved="false" />
+    </PreferenceCategory>
+
+    <PreferenceCategory
+        android:key="category_pyrowave_settings"
+        android:title="@string/category_pyrowave_settings"
+        app:iconSpaceReserved="false">
+        <Preference
+            android:key="pyrowave_info"
+            android:selectable="false"
+            android:summary="@string/summary_pyrowave_info"
+            app:iconSpaceReserved="false" />
+        <ListPreference
+            android:defaultValue="balanced"
+            android:entries="@array/pyrowave_late_frames_names"
+            android:entryValues="@array/pyrowave_late_frames_values"
+            android:key="pyrowave_late_frames"
+            android:summary="@string/summary_pyrowave_late_frames"
+            android:title="@string/title_pyrowave_late_frames"
+            app:iconSpaceReserved="false" />
+    </PreferenceCategory>
+
+    <!-- Penumbra (PEN-10): the Vulkan renderer, for every codec. Front buffer and GPU boost keep
+         the keys they had under PyroWave. -->
+    <PreferenceCategory
+        android:key="category_vulkan_renderer_settings"
+        android:title="@string/category_vulkan_renderer_settings"
+        app:iconSpaceReserved="false">
+        <CheckBoxPreference
+            android:defaultValue="false"
+            android:key="checkbox_vulkan_renderer"
+            android:summary="@string/summary_vulkan_renderer"
+            android:title="@string/title_vulkan_renderer"
+            app:iconSpaceReserved="false" />
+        <ListPreference
+            android:defaultValue="off"
+            android:entries="@array/vulkan_upscaler_names"
+            android:entryValues="@array/vulkan_upscaler_values"
+            android:key="list_vulkan_upscaler"
+            android:summary="@string/summary_vulkan_upscaler"
+            android:title="@string/title_vulkan_upscaler"
+            app:iconSpaceReserved="false" />
+        <CheckBoxPreference
+            android:defaultValue="false"
+            android:key="checkbox_pyrowave_front_buffer"
+            android:summary="@string/summary_pyrowave_front_buffer"
+            android:title="@string/title_pyrowave_front_buffer"
+            app:iconSpaceReserved="false" />
+        <CheckBoxPreference
+            android:defaultValue="false"
+            android:key="checkbox_pyrowave_gpu_boost"
+            android:summary="@string/summary_pyrowave_gpu_boost"
+            android:title="@string/title_pyrowave_gpu_boost"
+            app:iconSpaceReserved="false" />
+        <com.limelight.preferences.SeekBarPreference
+            android:defaultValue="0"
+            android:dialogMessage="@string/summary_pyrowave_pace"
+            android:key="pyrowave_pace_mbps"
+            android:max="3000"
+            android:summary="@string/summary_pyrowave_pace"
+            android:text="@string/suffix_pyrowave_pace"
+            android:title="@string/title_pyrowave_pace"
+            app:iconSpaceReserved="false"
+            seekbar:keyStep="50"
+            seekbar:min="0"
+            seekbar:step="50" />
     </PreferenceCategory>
 
     <PreferenceCategory
@@ -516,6 +595,12 @@
             android:summary="@string/summary_checkbox_host_audio"
             android:title="@string/title_checkbox_host_audio"
             app:iconSpaceReserved="false" />
+        <CheckBoxPreference
+            android:defaultValue="true"
+            android:key="checkbox_auto_recover_stream"
+            android:summary="@string/summary_checkbox_auto_recover_stream"
+            android:title="@string/title_checkbox_auto_recover_stream"
+            app:iconSpaceReserved="false" />
     </PreferenceCategory>
 
     <PreferenceCategory
@@ -935,6 +1020,21 @@
             android:key="checkbox_enable_perf_overlay_bottom"
             android:summary="@string/summary_checkbox_enable_perf_overlay_bottom"
             android:title="@string/title_checkbox_enable_perf_overlay_bottom"
+            app:iconSpaceReserved="false" />
+        <CheckBoxPreference
+            android:defaultValue="true"
+            android:dependency="checkbox_enable_perf_overlay"
+            android:key="checkbox_perf_overlay_latency"
+            android:summary="@string/summary_checkbox_perf_overlay_latency"
+            android:title="@string/title_checkbox_perf_overlay_latency"
+            app:iconSpaceReserved="false" />
+
+        <CheckBoxPreference
+            android:defaultValue="false"
+            android:dependency="checkbox_enable_perf_overlay"
+            android:key="checkbox_perf_overlay_host_metrics"
+            android:summary="@string/summary_checkbox_perf_overlay_host_metrics"
+            android:title="@string/title_checkbox_perf_overlay_host_metrics"
             app:iconSpaceReserved="false" />
 
         <CheckBoxPreference

@@ -89,6 +89,11 @@ public class NvConnection {
         return new SecureRandom().nextInt();
     }
 
+    /** The host's hardware-metrics version from serverinfo; 0 when it offers none */
+    public int getHostHardwareMetricsVersion() {
+        return context.hostHardwareMetricsVersion;
+    }
+
     public void stop() {
         // Interrupt any pending connection. This is thread-safe.
         MoonBridge.interruptConnection();
@@ -236,6 +241,7 @@ public class NvConnection {
 
         ComputerDetails details = h.getComputerDetails(serverInfo);
         context.isNvidiaServerSoftware = details.nvidiaServer;
+        context.hostHardwareMetricsVersion = details.hardwareMetricsVersion;
 
         // May be missing for older servers
         context.serverGfeVersion = h.getGfeVersion(serverInfo);
@@ -248,7 +254,8 @@ public class NvConnection {
         context.serverCodecModeSupport = (int)h.getServerCodecModeSupport(serverInfo);
 
         context.negotiatedHdr = (context.streamConfig.getSupportedVideoFormats() & MoonBridge.VIDEO_FORMAT_MASK_10BIT) != 0;
-        if ((context.serverCodecModeSupport & 0x20200) == 0 && context.negotiatedHdr) {
+        if ((context.serverCodecModeSupport & (MoonBridge.SCM_HEVC_MAIN10 | MoonBridge.SCM_AV1_MAIN10 |
+                MoonBridge.SCM_PYROWAVE_10BIT)) == 0 && context.negotiatedHdr) {
             context.connListener.displayTransientMessage("Your PC GPU does not support streaming HDR. The stream will be SDR.");
             context.negotiatedHdr = false;
         }
@@ -310,6 +317,21 @@ public class NvConnection {
             }
         }
         
+        if (context.streamConfig.getResumeOnly()) {
+            // Reconnecting after a dropout: the same game must still be running. Never launch
+            // one, and never quit whatever runs instead.
+            String runningUuid = h.getCurrentGameUUID(serverInfo);
+            boolean sameGame = (app.getAppId() != 0 && h.getCurrentGame(serverInfo) == app.getAppId()) ||
+                    (runningUuid != null && !runningUuid.isEmpty() && Objects.equals(runningUuid, app.getAppUUID()));
+            if (!sameGame) {
+                LimeLog.warning("Stream recovery: " + app.getAppName() + " is no longer running on the host (running: " +
+                        h.getCurrentGame(serverInfo) + "); not resuming");
+                context.connListener.displayMessage(app.getAppName() + " is no longer running on the host, so the stream wasn't resumed.");
+                return false;
+            }
+            LimeLog.info("Stream recovery: resuming " + app.getAppName());
+        }
+
         // If there's a game running, resume it
         if (h.getCurrentGame(serverInfo) != 0 || (h.getCurrentGameUUID(serverInfo) != null && !h.getCurrentGameUUID(serverInfo).isEmpty())) {
             try {
@@ -465,10 +487,12 @@ public class NvConnection {
                             context.streamConfig.getAudioConfiguration().toInt(),
                             context.streamConfig.getSupportedVideoFormats(),
                             context.streamConfig.getClientRefreshRateX100(),
+                            context.streamConfig.getClientRefreshRateUhz(),
                             context.riKey.getEncoded(), ib.array(),
                             context.videoCapabilities,
                             context.streamConfig.getColorSpace(),
-                            context.streamConfig.getColorRange());
+                            context.streamConfig.getColorRange(),
+                            context.streamConfig.getPyrowavePaceMbps());
                     if (ret != 0) {
                         // LiStartConnection() failed, so the caller is not expected
                         // to stop the connection themselves. We need to release their

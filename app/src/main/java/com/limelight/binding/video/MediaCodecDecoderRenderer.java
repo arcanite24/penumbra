@@ -84,6 +84,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     // Update stats using real decode time: enqueue->dequeue, instead of uptime - PTS
     private void updateDecodeLatencyStats(long presentationTimeUs) {
+        countCaptureToDecoded(presentationTimeUs);
         Long enqNs = enqueueNsByPtsUs.get(presentationTimeUs);
         if (enqNs != null) {
             enqueueNsByPtsUs.delete(presentationTimeUs);
@@ -102,9 +103,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     private static final boolean USE_FRAME_RENDER_TIME = false;
     private static final boolean FRAME_RENDER_TIME_ONLY = USE_FRAME_RENDER_TIME && false;
-
-    // Used on versions < 5.0
-    private ByteBuffer[] legacyInputBuffers;
 
     private MediaCodecInfo avcDecoder;
     private MediaCodecInfo hevcDecoder;
@@ -172,6 +170,17 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private VideoStats activeWindowVideoStats;
     private VideoStats lastWindowVideoStats;
     private VideoStats globalVideoStats;
+
+    /** One sample a second of the stream's health, for spotting periodic network stalls */
+    public interface StreamSampleListener {
+        /**
+         * @param lossPercent frames lost in the last second, or negative if none were due
+         * @param rttVarianceMs round-trip time variation, or negative if unknown
+         * @param fps the stream's frame rate
+         */
+        void onStreamSample(float lossPercent, float rttVarianceMs, float fps);
+    }
+    private volatile StreamSampleListener streamSampleListener;
     private volatile long probeLastFlipUptime;
 
     private long lastTimestampUs;
@@ -197,6 +206,46 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     private int targetFps = 0;
 
+    // PEN-9: a PyroWave stream has no MediaCodec; the Vulkan renderer decodes and presents it
+    private boolean pyrowave;
+    private volatile VulkanRendererBridge vulkanRenderer;
+    private long pyrowaveDecodeNs;
+    // PEN-10: H.264, HEVC and AV1 through the Vulkan renderer as well, when it's chosen and runs
+    // here: MediaCodec decodes into the renderer's AImageReader, and the renderer paces and
+    // presents. Cleared if the renderer fails to start, leaving the direct path.
+    private boolean wantVulkan;
+    private volatile boolean hdrEnabled;
+    private volatile byte[] hdrMetadataForVulkan;
+    private boolean vulkanFallbackReported;
+    private boolean frontBufferUnavailableReported;
+    // The extended arguments of the decode unit being submitted (submitDecodeUnit() overload)
+    private long duPresentationTimeUs, duEnqueueTimeUs, duReceiveTimeUs;
+
+    // Where a frame's capture latency counts from, on System.nanoTime(): the host's capture with
+    // clock sync, or else its first packet arriving less the host's processing time. For the
+    // direct (MediaCodec) renderer, by decoder timestamp, until the frame is decoded and then
+    // until it's rendered. The Vulkan renderer keeps its own (takeCaptureLatency()).
+    private static final class CaptureOrigin {
+        final long timeNs;
+        final boolean synced;
+
+        CaptureOrigin(long timeNs, boolean synced) {
+            this.timeNs = timeNs;
+            this.synced = synced;
+        }
+    }
+    private final LongSparseArray<CaptureOrigin> captureOriginByPtsUs = new LongSparseArray<>();
+    private final LongSparseArray<CaptureOrigin> renderOriginByPtsUs = new LongSparseArray<>();
+    private final long[] captureLatency = new long[6];
+    // Capture to decoded and to present as the renderer thread and the frame rendered callbacks
+    // count them (total us, frames, frames without clock sync, for each), folded into the stats
+    // window by the thread that submits frames
+    private final java.util.concurrent.atomic.AtomicLongArray pendingCaptureLatency =
+            new java.util.concurrent.atomic.AtomicLongArray(6);
+    private HandlerThread renderStatsThread;
+    private int[] duMissingRanges, duRecordStarts;
+    private int duPartialKind;
+
     private MediaCodecInfo findAvcDecoder() {
         MediaCodecInfo decoder = MediaCodecHelper.findProbableSafeDecoder("video/avc", MediaCodecInfo.CodecProfileLevel.AVCProfileHigh);
         if (decoder == null) {
@@ -205,7 +254,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         return decoder;
     }
 
-    @TargetApi(Build.VERSION_CODES.LOLLIPOP)
     private boolean decoderCanMeetPerformancePoint(MediaCodecInfo.VideoCapabilities caps, PreferenceConfiguration prefs) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             MediaCodecInfo.VideoCapabilities.PerformancePoint targetPerfPoint = new MediaCodecInfo.VideoCapabilities.PerformancePoint(initialWidth, initialHeight, Math.round(prefs.fps));
@@ -248,42 +296,24 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     }
 
     private boolean decoderCanMeetPerformancePointWithHevcAndNotAvc(MediaCodecInfo hevcDecoderInfo, MediaCodecInfo avcDecoderInfo, PreferenceConfiguration prefs) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            MediaCodecInfo.VideoCapabilities avcCaps = avcDecoderInfo.getCapabilitiesForType("video/avc").getVideoCapabilities();
-            MediaCodecInfo.VideoCapabilities hevcCaps = hevcDecoderInfo.getCapabilitiesForType("video/hevc").getVideoCapabilities();
+        MediaCodecInfo.VideoCapabilities avcCaps = avcDecoderInfo.getCapabilitiesForType("video/avc").getVideoCapabilities();
+        MediaCodecInfo.VideoCapabilities hevcCaps = hevcDecoderInfo.getCapabilitiesForType("video/hevc").getVideoCapabilities();
 
-            return !decoderCanMeetPerformancePoint(avcCaps, prefs) && decoderCanMeetPerformancePoint(hevcCaps, prefs);
-        }
-        else {
-            // No performance data
-            return false;
-        }
+        return !decoderCanMeetPerformancePoint(avcCaps, prefs) && decoderCanMeetPerformancePoint(hevcCaps, prefs);
     }
 
     private boolean decoderCanMeetPerformancePointWithAv1AndNotHevc(MediaCodecInfo av1DecoderInfo, MediaCodecInfo hevcDecoderInfo, PreferenceConfiguration prefs) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            MediaCodecInfo.VideoCapabilities av1Caps = av1DecoderInfo.getCapabilitiesForType("video/av01").getVideoCapabilities();
-            MediaCodecInfo.VideoCapabilities hevcCaps = hevcDecoderInfo.getCapabilitiesForType("video/hevc").getVideoCapabilities();
+        MediaCodecInfo.VideoCapabilities av1Caps = av1DecoderInfo.getCapabilitiesForType("video/av01").getVideoCapabilities();
+        MediaCodecInfo.VideoCapabilities hevcCaps = hevcDecoderInfo.getCapabilitiesForType("video/hevc").getVideoCapabilities();
 
-            return !decoderCanMeetPerformancePoint(hevcCaps, prefs) && decoderCanMeetPerformancePoint(av1Caps, prefs);
-        }
-        else {
-            // No performance data
-            return false;
-        }
+        return !decoderCanMeetPerformancePoint(hevcCaps, prefs) && decoderCanMeetPerformancePoint(av1Caps, prefs);
     }
 
     private boolean decoderCanMeetPerformancePointWithAv1AndNotAvc(MediaCodecInfo av1DecoderInfo, MediaCodecInfo avcDecoderInfo, PreferenceConfiguration prefs) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            MediaCodecInfo.VideoCapabilities avcCaps = avcDecoderInfo.getCapabilitiesForType("video/avc").getVideoCapabilities();
-            MediaCodecInfo.VideoCapabilities av1Caps = av1DecoderInfo.getCapabilitiesForType("video/av01").getVideoCapabilities();
+        MediaCodecInfo.VideoCapabilities avcCaps = avcDecoderInfo.getCapabilitiesForType("video/avc").getVideoCapabilities();
+        MediaCodecInfo.VideoCapabilities av1Caps = av1DecoderInfo.getCapabilitiesForType("video/av01").getVideoCapabilities();
 
-            return !decoderCanMeetPerformancePoint(avcCaps, prefs) && decoderCanMeetPerformancePoint(av1Caps, prefs);
-        }
-        else {
-            // No performance data
-            return false;
-        }
+        return !decoderCanMeetPerformancePoint(avcCaps, prefs) && decoderCanMeetPerformancePoint(av1Caps, prefs);
     }
 
     private MediaCodecInfo findHevcDecoder(PreferenceConfiguration prefs, boolean meteredNetwork, boolean requestedHdr) {
@@ -452,6 +482,16 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             refFrameInvalidationAvc = refFrameInvalidationHevc = false;
             LimeLog.warning("Disabling RFI due to previous crash");
         }
+
+        // PEN-10: the Vulkan renderer for MediaCodec's frames is opt-in. It needs Android 10 for the
+        // NDK image reader and Choreographer APIs, and the 2D stream view (the 3D modes draw the
+        // video themselves).
+        if (prefs.vulkanRenderer) {
+            wantVulkan = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && prefs.renderMode == 0 &&
+                    VulkanRendererBridge.isSupported();
+            LimeLog.info(wantVulkan ? "Vulkan renderer selected for MediaCodec streams" :
+                    "Vulkan renderer selected but unsupported here (needs Android 10+, Vulkan 1.1 and the 2D view); using the direct renderer");
+        }
     }
 
     public boolean isHevcSupported() {
@@ -533,6 +573,179 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         return this.videoFormat;
     }
 
+    // PyroWave decodes in the Vulkan renderer: 64-bit, Android 10+, Vulkan 1.1 with what PyroWave needs
+    public boolean isPyrowaveSupported() {
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && VulkanRendererBridge.isPyrowaveSupported();
+    }
+
+    private boolean isPyrowaveRequested() {
+        return prefs.videoFormat == PreferenceConfiguration.FormatOption.FORCE_PYROWAVE && isPyrowaveSupported();
+    }
+
+    /** The Vulkan renderer's PacingMode::HostTimed (frame_pacer.h); no frame pacing setting maps to it. */
+    private static final int VULKAN_PACING_HOST_TIMED = 4;
+
+    /** Whether frames go through the Vulkan renderer: PyroWave, or MediaCodec's with it chosen. */
+    public boolean isVulkanRendererActive() {
+        return vulkanRenderer != null;
+    }
+
+    private String getPacerTraceDirectory() {
+        try {
+            java.io.File directory = activity.getExternalFilesDir("pacer-traces");
+            return directory != null ? directory.getAbsolutePath() : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private String getVulkanCodecName() {
+        if (pyrowave) {
+            return "pyrowave";
+        } else if ((videoFormat & MoonBridge.VIDEO_FORMAT_MASK_H264) != 0) {
+            return "h264";
+        } else if ((videoFormat & MoonBridge.VIDEO_FORMAT_MASK_H265) != 0) {
+            return "hevc";
+        } else if ((videoFormat & MoonBridge.VIDEO_FORMAT_MASK_AV1) != 0) {
+            return "av1";
+        }
+        return "unknown";
+    }
+
+    /**
+     * Starts the Vulkan renderer on the output surface, for PyroWave or for MediaCodec's frames,
+     * with the same pacing, front buffer, GPU boost and upscaling choices either way. Null if it
+     * couldn't start.
+     */
+    private VulkanRendererBridge createVulkanRenderer(int width, int height, boolean tenBit, boolean fullRange,
+                                                      boolean centerChroma, String decoderName) {
+        float displayRefreshHz = 60.0f;
+        try {
+            displayRefreshHz = activity.getWindowManager().getDefaultDisplay().getRefreshRate();
+        } catch (Exception ignored) {}
+
+        // The renderer's jitter buffer: low latency (0) with the lowest-latency pacing, else balanced (1)
+        int jitterBuffer = prefs.framePacing == PreferenceConfiguration.FRAME_PACING_MIN_LATENCY ? 0 : 1;
+        // The renderer only draws into a front buffer when it places frames itself: host-timed
+        // pacing puts each frame on a scan from the host's frame times, with the jitter buffer
+        // absorbing network jitter, so a front buffer always uses it
+        // absorbing network jitter, so a front buffer always uses it. Without one, the renderer's
+        // own vsync-picking modes (balanced, cap, smoothest) skipped about 1 frame in 12 at
+        // 120 fps on the Odin 2, where host-timed pacing showed 119 of 120, so they map to
+        // host-timed too; lowest latency keeps showing each frame as it arrives
+        int pacing = prefs.vulkanFrontBuffer || prefs.framePacing != PreferenceConfiguration.FRAME_PACING_MIN_LATENCY
+                ? VULKAN_PACING_HOST_TIMED : prefs.framePacing;
+        VulkanRendererBridge renderer = VulkanRendererBridge.create(renderTarget, width, height, targetFps,
+                pacing, jitterBuffer, 0 /* no dithering */,
+                getPreferredColorSpace(), fullRange, tenBit,
+                pyrowave, centerChroma, prefs.pyrowaveLateFrames, displayRefreshHz,
+                getVulkanCodecName(), decoderName, getPacerTraceDirectory(), prefs.vulkanFrontBuffer,
+                prefs.vulkanGpuBoost, prefs.upscaler);
+        if (renderer != null) {
+            LimeLog.info("Vulkan renderer started: " + getVulkanCodecName() + " " + width + "x" + height +
+                    (tenBit ? " 10-bit" : "") + ", pacing mode " + pacing + ", front buffer " +
+                    (prefs.vulkanFrontBuffer ? "on" : "off") + ", GPU boost " + (prefs.vulkanGpuBoost ? "on" : "off") +
+                    ", upscaler " + prefs.upscaler);
+            try {
+                renderer.setVsyncOffset(activity.getWindowManager().getDefaultDisplay().getAppVsyncOffsetNanos());
+            } catch (Exception ignored) {}
+            if (hdrEnabled) {
+                renderer.setHdrMode(true, hdrMetadataForVulkan);
+            }
+        }
+        return renderer;
+    }
+
+    private void reportVulkanFallback() {
+        if (vulkanFallbackReported) {
+            return;
+        }
+        vulkanFallbackReported = true;
+        LimeLog.warning("Vulkan renderer failed to start; using the direct renderer");
+        activity.runOnUiThread(() -> com.limelight.utils.PenumbraToast.makeText(activity,
+                R.string.toast_vulkan_fallback, android.widget.Toast.LENGTH_LONG).show());
+    }
+
+    private int setupPyrowave(int width, int height) {
+        pyrowave = true;
+
+        // Hosts that name their PyroWave revision (Vibepollo) site 4:2:0 chroma at the center
+        String bitstreamId = MoonBridge.getHostPyroWaveBitstreamId();
+        boolean centerChroma = bitstreamId != null && !bitstreamId.isEmpty();
+        LimeLog.info("PyroWave host bitstream revision: " + (centerChroma ? bitstreamId : "(not given)"));
+
+        boolean tenBit = (videoFormat & MoonBridge.VIDEO_FORMAT_PYROWAVE_10BIT) != 0;
+        // PyroWave is always full range
+        vulkanRenderer = createVulkanRenderer(width, height, tenBit, true, centerChroma, null);
+        if (vulkanRenderer == null) {
+            LimeLog.severe("PyroWave decoding failed to start");
+            return -1;
+        }
+        LimeLog.info("Decoding PyroWave in the Vulkan renderer at " + width + "x" + height + (tenBit ? " 10-bit" : ""));
+        return 0;
+    }
+
+    @Override
+    public int submitDecodeUnit(byte[] decodeUnitData, int decodeUnitLength, int decodeUnitType,
+                                int frameNumber, int frameType, char frameHostProcessingLatency,
+                                long receiveTimeUs, long enqueueTimeUs, long presentationTimeUs,
+                                int[] missingRanges, int[] recordStarts, int partialKind) {
+        // Frames come from one thread, so the extras can ride along in fields
+        duPresentationTimeUs = presentationTimeUs;
+        duEnqueueTimeUs = enqueueTimeUs;
+        duReceiveTimeUs = receiveTimeUs;
+        duMissingRanges = missingRanges;
+        duRecordStarts = recordStarts;
+        duPartialKind = partialKind;
+        return submitDecodeUnit(decodeUnitData, decodeUnitLength, decodeUnitType, frameNumber, frameType,
+                frameHostProcessingLatency, receiveTimeUs / 1000, enqueueTimeUs / 1000);
+    }
+
+    private int submitPyrowaveFrame(byte[] decodeUnitData, int decodeUnitLength, char frameHostProcessingLatency,
+                                    long receiveTimeMs, long enqueueTimeMs) {
+        VulkanRendererBridge vulkan = vulkanRenderer;
+        if (vulkan == null) {
+            return MoonBridge.DR_OK;
+        }
+
+        if (frameHostProcessingLatency != 0) {
+            if (activeWindowVideoStats.minHostProcessingLatency != 0) {
+                activeWindowVideoStats.minHostProcessingLatency = (char) Math.min(activeWindowVideoStats.minHostProcessingLatency, frameHostProcessingLatency);
+            } else {
+                activeWindowVideoStats.minHostProcessingLatency = frameHostProcessingLatency;
+            }
+            activeWindowVideoStats.framesWithHostProcessingLatency += 1;
+        }
+        activeWindowVideoStats.maxHostProcessingLatency = (char) Math.max(activeWindowVideoStats.maxHostProcessingLatency, frameHostProcessingLatency);
+        activeWindowVideoStats.totalHostProcessingLatency += frameHostProcessingLatency;
+        activeWindowVideoStats.totalFramesReceived++;
+        activeWindowVideoStats.totalFrames++;
+        activeWindowVideoStats.totalTimeMs += enqueueTimeMs - receiveTimeMs;
+
+        vulkan.noteFrameReceived(duPresentationTimeUs, receiveTimeMs * 1000, duEnqueueTimeUs, frameHostProcessingLatency);
+        // A frame that can't be decoded is just skipped: the next one stands alone
+        vulkan.submitPyrowaveFrame(decodeUnitData, decodeUnitLength, duPresentationTimeUs, duEnqueueTimeUs,
+                duMissingRanges, duRecordStarts, duPartialKind);
+
+        // What the renderer presented and how long decoding took, since the last frame
+        activeWindowVideoStats.totalFramesRendered += vulkan.takePresentedFrames();
+        Arrays.fill(captureLatency, 0);
+        vulkan.takeCaptureLatency(captureLatency);
+        activeWindowVideoStats.totalCaptureToDecodedUs += captureLatency[0] / 1000;
+        activeWindowVideoStats.framesWithCaptureToDecoded += (int) captureLatency[1];
+        activeWindowVideoStats.decodedWithoutNetworkTransit += (int) captureLatency[2];
+        activeWindowVideoStats.totalCaptureToPresentUs += captureLatency[3] / 1000;
+        activeWindowVideoStats.framesWithCaptureToPresent += (int) captureLatency[4];
+        activeWindowVideoStats.presentedWithoutNetworkTransit += (int) captureLatency[5];
+        pyrowaveDecodeNs += vulkan.takeDecodedNs();
+        long decodeMs = pyrowaveDecodeNs / 1_000_000L;
+        pyrowaveDecodeNs -= decodeMs * 1_000_000L;
+        activeWindowVideoStats.decoderTimeMs += decodeMs;
+        activeWindowVideoStats.totalTimeMs += decodeMs;
+
+        return MoonBridge.DR_OK;
+    }
+
     private MediaFormat createBaseMediaFormat(String mimeType) {
         MediaFormat videoFormat = MediaFormat.createVideoFormat(mimeType, initialWidth, initialHeight);
 
@@ -607,7 +820,29 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         LimeLog.info("Configuring with format: "+format);
 
-        videoDecoder.configure(format, renderTarget, null, 0);
+        // PEN-10: the Vulkan renderer lives as long as this object, so a decoder restart (codec
+        // recovery, or an HDR change) decodes into the same image reader
+        if (wantVulkan && vulkanRenderer == null) {
+            String decoderName = null;
+            try {
+                decoderName = videoDecoder.getName();
+            } catch (Exception ignored) {}
+            vulkanRenderer = createVulkanRenderer(initialWidth, initialHeight,
+                    (videoFormat & MoonBridge.VIDEO_FORMAT_MASK_10BIT) != 0,
+                    getPreferredColorRange() == MoonBridge.COLOR_RANGE_FULL, false, decoderName);
+            if (vulkanRenderer == null) {
+                wantVulkan = false;
+                reportVulkanFallback();
+            }
+        }
+        VulkanRendererBridge vulkan = vulkanRenderer;
+        Surface decoderSurface = vulkan != null ? vulkan.getDecoderSurface() : renderTarget;
+        if (vulkan != null) {
+            LimeLog.info("MediaCodec decodes into the Vulkan renderer's image reader");
+        }
+
+        videoDecoder.configure(format, decoderSurface, null, 0);
+        registerFrameRenderedListener();
 
         // Penumbra (PEN-6): the surface frame rate is set once, in Game.surfaceCreated(), which
         // picks the refresh rate that suits the stream. Overriding it here with the raw stream FPS
@@ -630,11 +865,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         spsBuffers.clear();
         ppsBuffers.clear();
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            // This will contain the actual accepted input format attributes
-            inputFormat = videoDecoder.getInputFormat();
-            LimeLog.info("Input format: "+inputFormat);
-        }
+        // This will contain the actual accepted input format attributes
+        inputFormat = videoDecoder.getInputFormat();
+        LimeLog.info("Input format: "+inputFormat);
 
         videoDecoder.setVideoScalingMode(MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT);
 
@@ -649,11 +882,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             LimeLog.info("Decoder output format: " + (__outF != null ? __outF.toString() : "<null>"));
         } catch (Throwable t) {
             LimeLog.info("Decoder formats unavailable after start");
-        }
-
-
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
-            legacyInputBuffers = videoDecoder.getInputBuffers();
         }
     }
 
@@ -762,6 +990,32 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             MediaFormat mediaFormat = createBaseMediaFormat(mimeType);
             // This will try low latency options until we find one that works (or we give up).
             boolean newFormat = MediaCodecHelper.setDecoderLowLatencyOptions(mediaFormat, selectedDecoderInfo, prefs.enableUltraLowLatency, tryNumber);
+
+            // PEN-10: ask for an input buffer that fits high-bitrate frames. The decoder's own
+            // default is only known after configure, so AUTO asks whenever the stream has an
+            // estimate and configures again without the request if the decoder refuses it.
+            int inputSize = DecoderInputBufferSizing.requestedInputSize(prefs.decoderInputBufferMode,
+                    mimeType, initialWidth, initialHeight, prefs.bitrate, Math.round(prefs.fps), 0);
+            if (inputSize > 0) {
+                mediaFormat.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, inputSize);
+                if (tryConfigureDecoder(selectedDecoderInfo, mediaFormat,
+                        !newFormat && throwOnCodecError && !DecoderInputBufferSizing.retryWithoutRequest(prefs.decoderInputBufferMode, inputSize))) {
+                    requestedInputBufferSize = inputSize;
+                    logInputBufferSize(inputSize);
+                    break;
+                }
+                if (DecoderInputBufferSizing.retryWithoutRequest(prefs.decoderInputBufferMode, inputSize)) {
+                    LimeLog.warning("Decoder refused KEY_MAX_INPUT_SIZE=" + inputSize + ", configuring without it");
+                    mediaFormat = createBaseMediaFormat(mimeType);
+                    MediaCodecHelper.setDecoderLowLatencyOptions(mediaFormat, selectedDecoderInfo, prefs.enableUltraLowLatency, tryNumber);
+                } else {
+                    if (!newFormat) {
+                        return -5;
+                    }
+                    continue;
+                }
+            }
+            requestedInputBufferSize = 0;
             //todo 色彩格式
 //            MediaCodecInfo.CodecCapabilities codecCapabilities = selectedDecoderInfo.getCapabilitiesForType(mimeType);
 //            int[] colorFormats=codecCapabilities.colorFormats;
@@ -771,6 +1025,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             // Throw the underlying codec exception on the last attempt if the caller requested it
             if (tryConfigureDecoder(selectedDecoderInfo, mediaFormat, !newFormat && throwOnCodecError)) {
                 // Success!
+                logInputBufferSize(0);
                 break;
             }
 
@@ -804,6 +1059,13 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         this.initialHeight = invertResolution ? width : height;
         this.videoFormat = format;
         this.refreshRate = redrawRate;
+
+        if ((format & MoonBridge.VIDEO_FORMAT_MASK_PYROWAVE) != 0) {
+            return setupPyrowave(width, height);
+        }
+        if (prefs.videoFormat == PreferenceConfiguration.FormatOption.FORCE_PYROWAVE) {
+            LimeLog.warning("PyroWave was asked for, but the host started another codec");
+        }
 
         return initializeDecoder(false);
     }
@@ -878,7 +1140,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
                 // For "non-recoverable" exceptions on L+, we can call reset() to recover
                 // without having to recreate the entire decoder again.
-                if (codecRecoveryType.get() == CR_RECOVERY_TYPE_RESET && Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                if (codecRecoveryType.get() == CR_RECOVERY_TYPE_RESET) {
                     LimeLog.warning("Trying to reset decoder after CodecException");
                     try {
                         videoDecoder.reset();
@@ -961,7 +1223,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             return false;
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && e instanceof CodecException) {
+        if (e instanceof CodecException) {
             CodecException codecExc = (CodecException) e;
 
             if (codecExc.isTransient()) {
@@ -1075,9 +1337,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             return;
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            frameTimeNanos -= activity.getWindowManager().getDefaultDisplay().getAppVsyncOffsetNanos();
-        }
+        frameTimeNanos -= activity.getWindowManager().getDefaultDisplay().getAppVsyncOffsetNanos();
 
         // Don't render unless a new frame is due. This prevents microstutter when streaming
         // at a frame rate that doesn't match the display (such as 60 FPS on 120 Hz).
@@ -1136,8 +1396,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     }
 
     private void startChoreographerThread() {
-        if (prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED) {
-            // Not using Choreographer in this pacing mode
+        if (prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED || vulkanRenderer != null) {
+            // Not using Choreographer in this pacing mode, or the Vulkan renderer paces frames
             return;
         }
 
@@ -1252,8 +1512,16 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                             }
                             lastDecoderPtsUs = presentationTimeUs;
 
+                            if (vulkanRenderer != null) {
+                                // PEN-10: the Vulkan renderer paces frames itself, so each one goes
+                                // to its image reader as soon as it's decoded. What it presents is
+                                // counted from the renderer (submitDecodeUnit()).
+                                videoDecoder.releaseOutputBuffer(lastIndex, true);
+                                updateDecodeLatencyStats(presentationTimeUs);
+                                statsUpdated = true;
+                            }
                             // Render the latest frame now if frame pacing isn't in balanced mode
-                            if (prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED) {
+                            else if (prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED) {
                                 // Get the last output buffer in the queue. Non-blocking: waiting here
                                 // would delay presenting a frame we already have.
                                 while ((outIndex = videoDecoder.dequeueOutputBuffer(info, 0)) >= 0) {
@@ -1387,20 +1655,12 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             if (nextInputBufferIndex >= 0) {
                 // Using the new getInputBuffer() API on Lollipop allows
                 // the framework to do some performance optimizations for us
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                    nextInputBuffer = videoDecoder.getInputBuffer(nextInputBufferIndex);
-                    if (nextInputBuffer == null) {
-                        // According to the Android docs, getInputBuffer() can return null "if the
-                        // index is not a dequeued input buffer". I don't think this ever should
-                        // happen but if it does, let's try to get a new input buffer next time.
-                        nextInputBufferIndex = -1;
-                    }
-                }
-                else {
-                    nextInputBuffer = legacyInputBuffers[nextInputBufferIndex];
-
-                    // Clear old input data pre-Lollipop
-                    nextInputBuffer.clear();
+                nextInputBuffer = videoDecoder.getInputBuffer(nextInputBufferIndex);
+                if (nextInputBuffer == null) {
+                    // According to the Android docs, getInputBuffer() can return null "if the
+                    // index is not a dequeued input buffer". I don't think this ever should
+                    // happen but if it does, let's try to get a new input buffer next time.
+                    nextInputBufferIndex = -1;
                 }
             }
         } catch (IllegalStateException e) {
@@ -1442,6 +1702,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     @Override
     public void start() {
+        if (pyrowave) {
+            // The Vulkan renderer paces and presents on threads of its own
+            return;
+        }
         startRendererThread();
         startChoreographerThread();
     }
@@ -1460,6 +1724,13 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         synchronized (codecRecoveryMonitor) {
             codecRecoveryType.set(CR_RECOVERY_TYPE_NONE);
             codecRecoveryMonitor.notifyAll();
+        }
+
+        // PEN-10: the output surface may be about to go away, so the Vulkan renderer stops
+        // presenting to it now. MediaCodec can still write into its image reader.
+        VulkanRendererBridge vulkanToStop = vulkanRenderer;
+        if (vulkanToStop != null && !pyrowave) {
+            vulkanToStop.stop();
         }
 
         // Post a quit message to the Choreographer looper (if we have one)
@@ -1496,6 +1767,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             }
         }
 
+        if (pyrowave) {
+            VulkanRendererBridge vulkan = vulkanRenderer;
+            if (vulkan != null) {
+                vulkan.stop();
+            }
+            return;
+        }
+
         // Wait for the renderer thread to shut down
         try {
             rendererThread.join();
@@ -1511,11 +1790,43 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     @Override
     public void cleanup() {
-        videoDecoder.release();
+        if (pyrowave) {
+            VulkanRendererBridge vulkan = vulkanRenderer;
+            vulkanRenderer = null;
+            if (vulkan != null) {
+                vulkan.destroy();
+            }
+            return;
+        }
+        if (videoDecoder != null) {
+            videoDecoder.release();
+        }
+        if (renderStatsThread != null) {
+            renderStatsThread.quitSafely();
+            renderStatsThread = null;
+        }
+
+        // Only once the decoder has let go of the renderer's image reader
+        VulkanRendererBridge vulkan = vulkanRenderer;
+        vulkanRenderer = null;
+        if (vulkan != null) {
+            vulkan.destroy();
+        }
     }
 
     @Override
     public void setHdrMode(boolean enabled, byte[] hdrMetadata) {
+        hdrEnabled = enabled;
+        hdrMetadataForVulkan = hdrMetadata;
+        // The Vulkan renderer switches its output between SDR and HDR10 itself (PEN-10 for
+        // MediaCodec's frames), and MediaCodec below still restarts to pick up the metadata
+        VulkanRendererBridge vulkanForHdr = vulkanRenderer;
+        if (vulkanForHdr != null) {
+            vulkanForHdr.setHdrMode(enabled, hdrMetadata);
+        }
+        if (pyrowave) {
+            return;
+        }
         // HDR metadata is only supported in Android 7.0 and later, so don't bother
         // restarting the codec on anything earlier than that.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
@@ -1601,7 +1912,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             sps.constraintSet4Flag = true;
             sps.constraintSet5Flag = true;
         }
-        else {
+        else if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
             // Force the constraints unset otherwise (some may be set by default)
             sps.constraintSet4Flag = false;
             sps.constraintSet5Flag = false;
@@ -1637,8 +1948,36 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         lastFrameNumber = frameNumber;
 
+        // PEN-10: MediaCodec's frames through the Vulkan renderer are counted as rendered once the
+        // renderer presents them (PyroWave counts its own in submitPyrowaveFrame())
+        VulkanRendererBridge vulkanStats = vulkanRenderer;
+        if (vulkanStats != null && !pyrowave) {
+            activeWindowVideoStats.totalFramesRendered += vulkanStats.takePresentedFrames();
+        }
+
+        foldPendingCaptureLatency();
+
         // Flip stats windows roughly every second
         if (SystemClock.uptimeMillis() >= activeWindowVideoStats.measurementStartTimestamp + 1000) {
+            StreamSampleListener sampleListener = streamSampleListener;
+            if (sampleListener != null) {
+                float lossPercent = activeWindowVideoStats.totalFrames > 0 ?
+                        100f * activeWindowVideoStats.framesLost / activeWindowVideoStats.totalFrames : -1;
+                long sampleRtt = MoonBridge.getEstimatedRttInfo();
+                sampleListener.onStreamSample(lossPercent, sampleRtt >= 0 ? (int) sampleRtt : -1, prefs.fps);
+            }
+            if (vulkanStats != null) {
+                // The display mode can change mid-stream
+                try {
+                    vulkanStats.setVsyncOffset(activity.getWindowManager().getDefaultDisplay().getAppVsyncOffsetNanos());
+                } catch (Exception ignored) {}
+                if (!frontBufferUnavailableReported && vulkanStats.isFrontBufferUnavailable()) {
+                    frontBufferUnavailableReported = true;
+                    LimeLog.warning("Front buffer asked for, but the device has none; using the normal swapchain");
+                    activity.runOnUiThread(() -> com.limelight.utils.PenumbraToast.makeText(activity,
+                            R.string.toast_vulkan_front_buffer_unavailable, android.widget.Toast.LENGTH_LONG).show());
+                }
+            }
             if (prefs.enablePerfOverlay || prefs.enablePerfLogging) {
                 VideoStats lastTwo = new VideoStats();
                 lastTwo.add(lastWindowVideoStats);
@@ -1652,6 +1991,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     decoder = hevcDecoder.getName();
                 } else if ((videoFormat & MoonBridge.VIDEO_FORMAT_MASK_AV1) != 0) {
                     decoder = av1Decoder.getName();
+                } else if (pyrowave) {
+                    decoder = "PyroWave (Vulkan)";
                 } else {
                     decoder = "(unknown)";
                 }
@@ -1684,6 +2025,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     sb.append(context.getString(R.string.perf_overlay_lite_netdrops,(float)lastTwo.framesLost / lastTwo.totalFrames * 100));
                     sb.append("\t FPS：");
                     sb.append(context.getString(R.string.perf_overlay_lite_fps, fps.totalFps));
+                    String latencyText = captureLatencyText(lastTwo, rttInfo, true);
+                    if (latencyText != null) {
+                        sb.append("\t ").append(latencyText);
+                    }
+                    String bitrateLabel = streamBitrateLabel;
+                    if (bitrateLabel != null) {
+                        sb.append('\t').append(context.getString(R.string.perf_overlay_bitrate, bitrateLabel));
+                    }
                     if(Stereo3DRenderer.isActive) {
                         sb.append(" ");
                         sb.append(context.getString(R.string.perf_overlay_ai_fps));
@@ -1716,6 +2065,23 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     }
                     sb.append('\n');
                     sb.append(context.getString(R.string.perf_overlay_decoder, decoder)).append('\n');
+                    if (vulkanStats != null) {
+                        // PEN-10: what the Vulkan renderer outputs (HDR, upscaling) and its pacing
+                        String rendererText = vulkanStats.getRendererText();
+                        String pacingText = vulkanStats.getPacingText();
+                        StringBuilder renderer = new StringBuilder(rendererText != null ? rendererText : "Vulkan");
+                        if (vulkanStats.isFrontBufferActive()) {
+                            renderer.append(", front buffer");
+                        }
+                        if (pacingText != null && !pacingText.isEmpty()) {
+                            renderer.append(", ").append(pacingText.replace('\n', ' ').trim());
+                        }
+                        sb.append(context.getString(R.string.perf_overlay_renderer, renderer.toString())).append('\n');
+                    }
+                    String bitrateLabel = streamBitrateLabel;
+                    if (bitrateLabel != null) {
+                        sb.append(context.getString(R.string.perf_overlay_bitrate, bitrateLabel)).append('\n');
+                    }
                     sb.append(context.getString(R.string.perf_overlay_incomingfps, fps.receivedFps)).append('\n');
                     sb.append(context.getString(R.string.perf_overlay_renderingfps, fps.renderedFps)).append('\n');
                     sb.append(context.getString(R.string.perf_overlay_netdrops,
@@ -1742,6 +2108,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                 (float)lastTwo.totalHostProcessingLatency / 10 / lastTwo.framesWithHostProcessingLatency)).append('\n');
                     }
                     sb.append(context.getString(R.string.perf_overlay_dectime, decodeTimeMs));
+                    String latencyText = captureLatencyText(lastTwo, rttInfo, false);
+                    if (latencyText != null) {
+                        sb.append('\n').append(latencyText);
+                    }
                 }
                 String fullLog = sb.toString();
                 if(prefs.enablePerfOverlay) {
@@ -1759,6 +2129,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             lastWindowVideoStats.copy(activeWindowVideoStats);
             activeWindowVideoStats.clear();
             activeWindowVideoStats.measurementStartTimestamp = SystemClock.uptimeMillis();
+        }
+
+        if (pyrowave) {
+            return submitPyrowaveFrame(decodeUnitData, decodeUnitLength, frameHostProcessingLatency,
+                    receiveTimeMs, enqueueTimeMs);
         }
 
         boolean csdSubmittedForThisFrame = false;
@@ -1783,7 +2158,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 // Since we only need one frame buffered, we'll set the level as low as we can
                 // for known resolution combinations. Reference frame invalidation may need
                 // these, so leave them be for those decoders.
-                if (!refFrameInvalidationActive) {
+                if (!refFrameInvalidationActive && Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
                     if (initialWidth <= 720 && initialHeight <= 480 && refreshRate <= 60) {
                         // Max 5 buffered frames at 720x480x60
                         LimeLog.info("Patching level_idc to 31");
@@ -2015,7 +2390,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             }
         }
 
-        long timestampUs = enqueueTimeMs * 1000;
+        // PEN-10: through the Vulkan renderer, each frame carries the host's timestamp, which its
+        // pacer reads back from the image (AImage_getTimestamp()) to place frames on vsyncs
+        VulkanRendererBridge vulkanInput = vulkanRenderer;
+        long timestampUs = vulkanInput != null && !pyrowave && duPresentationTimeUs > 0 ?
+                duPresentationTimeUs : enqueueTimeMs * 1000;
         if (timestampUs <= lastTimestampUs) {
             // We can't submit multiple buffers with the same timestamp
             // so bump it up by one before queuing
@@ -2026,6 +2405,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         numFramesIn++;
 
         if (decodeUnitLength > nextInputBuffer.limit() - nextInputBuffer.position()) {
+            if (growInputBuffer(nextInputBuffer.position() + decodeUnitLength, nextInputBuffer.limit())) {
+                // Quiesce and restart now; this drops the half-filled input buffer
+                doCodecRecoveryIfRequired(CR_FLAG_INPUT_THREAD);
+                return MoonBridge.DR_NEED_IDR;
+            }
             IllegalArgumentException exception = new IllegalArgumentException(
                     "Decode unit length "+decodeUnitLength+" too large for input buffer "+nextInputBuffer.limit());
             if (!reportedCrash) {
@@ -2038,11 +2422,152 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         // Copy data from our buffer list into the input buffer
         nextInputBuffer.put(decodeUnitData, 0, decodeUnitLength);
 
+        if (vulkanInput != null) {
+            vulkanInput.noteFrameReceived(timestampUs, duReceiveTimeUs, duEnqueueTimeUs, frameHostProcessingLatency);
+        }
+        noteCaptureOrigin(timestampUs, duPresentationTimeUs, duReceiveTimeUs, frameHostProcessingLatency);
+
         if (!queueNextInputBuffer(timestampUs, codecFlags)) {
             return MoonBridge.DR_NEED_IDR;
         }
 
         return MoonBridge.DR_OK;
+    }
+
+    // A frame the host gave no processing time for repeats an earlier one, so it has no capture of
+    // its own. From Moonlight X (85d98daf1).
+    private void noteCaptureOrigin(long ptsUs, long hostPtsUs, long receiveTimeUs, char hostProcessingLatency) {
+        if (hostProcessingLatency == 0 || !prefs.enablePerfOverlay) {
+            return;
+        }
+
+        // moonlight-common-c's clock to System.nanoTime(), which MediaCodec's render times are on
+        long commonToLocalNs = System.nanoTime() - MoonBridge.getMicroseconds() * 1000;
+        CaptureOrigin origin;
+        long captureUs = MoonBridge.getHostTimeOnLocalClock(hostPtsUs);
+        if (captureUs >= 0) {
+            origin = new CaptureOrigin(captureUs * 1000 + commonToLocalNs, true);
+        }
+        else if (receiveTimeUs != 0) {
+            // Without clock sync, nothing measures the network transit per frame, so it's left
+            // out. The host's part is on its clock and the rest on ours, so they add without the
+            // clocks needing to agree.
+            origin = new CaptureOrigin((receiveTimeUs - hostProcessingLatency * 100L) * 1000 + commonToLocalNs, false);
+        }
+        else {
+            return;
+        }
+
+        synchronized (captureOriginByPtsUs) {
+            captureOriginByPtsUs.put(ptsUs, origin);
+            while (captureOriginByPtsUs.size() > 64) {
+                captureOriginByPtsUs.removeAt(0);
+            }
+        }
+    }
+
+    private void countCaptureToDecoded(long ptsUs) {
+        CaptureOrigin origin;
+        synchronized (captureOriginByPtsUs) {
+            int index = captureOriginByPtsUs.indexOfKey(ptsUs);
+            if (index < 0) {
+                return;
+            }
+            origin = captureOriginByPtsUs.valueAt(index);
+
+            // Frames are decoded in order, so any still waiting before this one never will be
+            for (int i = index; i >= 0; i--) {
+                captureOriginByPtsUs.removeAt(i);
+            }
+        }
+
+        if (countLatency(0, System.nanoTime() - origin.timeNs, origin.synced) &&
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            synchronized (renderOriginByPtsUs) {
+                renderOriginByPtsUs.put(ptsUs, origin);
+                while (renderOriginByPtsUs.size() > 64) {
+                    renderOriginByPtsUs.removeAt(0);
+                }
+            }
+        }
+    }
+
+    // Capture to present for the direct renderer, as MediaCodec reports frames reaching the
+    // display. Some devices report late or in batches, and frames dropped before display never.
+    private void registerFrameRenderedListener() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+            return;
+        }
+        if (renderStatsThread == null) {
+            renderStatsThread = new HandlerThread("Video - Render stats", Process.THREAD_PRIORITY_DISPLAY);
+            renderStatsThread.start();
+        }
+        videoDecoder.setOnFrameRenderedListener((codec, presentationTimeUs, renderTimeNanos) -> {
+            CaptureOrigin origin;
+            synchronized (renderOriginByPtsUs) {
+                int index = renderOriginByPtsUs.indexOfKey(presentationTimeUs);
+                if (index < 0) {
+                    return;
+                }
+                origin = renderOriginByPtsUs.valueAt(index);
+                for (int i = index; i >= 0; i--) {
+                    renderOriginByPtsUs.removeAt(i);
+                }
+            }
+            countLatency(3, renderTimeNanos - origin.timeNs, origin.synced);
+        }, new Handler(renderStatsThread.getLooper()));
+    }
+
+    // Counts a capture latency into pendingCaptureLatency at base (0 decoded, 3 presented).
+    // Outside a second, the clock sync or the frame's timing must be wrong.
+    private boolean countLatency(int base, long latencyNs, boolean synced) {
+        if (latencyNs < 0 || latencyNs >= 1_000_000_000L) {
+            return false;
+        }
+        pendingCaptureLatency.addAndGet(base, latencyNs / 1000);
+        pendingCaptureLatency.incrementAndGet(base + 1);
+        if (!synced) {
+            pendingCaptureLatency.incrementAndGet(base + 2);
+        }
+        return true;
+    }
+
+    private void foldPendingCaptureLatency() {
+        activeWindowVideoStats.totalCaptureToDecodedUs += pendingCaptureLatency.getAndSet(0, 0);
+        activeWindowVideoStats.framesWithCaptureToDecoded += (int) pendingCaptureLatency.getAndSet(1, 0);
+        activeWindowVideoStats.decodedWithoutNetworkTransit += (int) pendingCaptureLatency.getAndSet(2, 0);
+        activeWindowVideoStats.totalCaptureToPresentUs += pendingCaptureLatency.getAndSet(3, 0);
+        activeWindowVideoStats.framesWithCaptureToPresent += (int) pendingCaptureLatency.getAndSet(4, 0);
+        activeWindowVideoStats.presentedWithoutNetworkTransit += (int) pendingCaptureLatency.getAndSet(5, 0);
+    }
+
+    // Average capture latency in milliseconds. Frames measured without clock sync leave out the
+    // network transit, which can only be estimated for them as half the round trip: that assumes
+    // the path is symmetric, at enet's 1 ms resolution.
+    private static float averageCaptureLatencyMs(long totalUs, int frames, int withoutNetworkTransit, long rttInfo) {
+        float networkMs = rttInfo >= 0 ? (rttInfo >> 32) / 2f : 0;
+        return (totalUs / 1000f + networkMs * withoutNetworkTransit) / frames;
+    }
+
+    // The overlay's capture latency text: capture to decoded/present where both are measured, or
+    // else capture to decoded, marked as estimated when most frames had no clock sync. Null when
+    // nothing was measured or it's turned off.
+    private String captureLatencyText(VideoStats stats, long rttInfo, boolean lite) {
+        if (!prefs.perfOverlayLatency || stats.framesWithCaptureToDecoded == 0) {
+            return null;
+        }
+        float decodedMs = averageCaptureLatencyMs(stats.totalCaptureToDecodedUs, stats.framesWithCaptureToDecoded,
+                stats.decodedWithoutNetworkTransit, rttInfo);
+        boolean estimated = stats.decodedWithoutNetworkTransit * 2 > stats.framesWithCaptureToDecoded;
+        String source = context.getString(estimated ? R.string.perf_overlay_latency_estimated : R.string.perf_overlay_latency_synced);
+        if (stats.framesWithCaptureToPresent > 0) {
+            float presentMs = averageCaptureLatencyMs(stats.totalCaptureToPresentUs, stats.framesWithCaptureToPresent,
+                    stats.presentedWithoutNetworkTransit, rttInfo);
+            return lite ? context.getString(R.string.perf_overlay_lite_capture_to_present, presentMs, source) :
+                    context.getString(R.string.perf_overlay_capture_latency, decodedMs, presentMs, source);
+        }
+        return lite ? context.getString(R.string.perf_overlay_lite_capture_to_decoded, decodedMs, source) :
+                context.getString(R.string.perf_overlay_capture_to_decoded, decodedMs, source);
     }
 
     private boolean replaySps() {
@@ -2089,12 +2614,26 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             capabilities |= MoonBridge.CAPABILITY_REFERENCE_FRAME_INVALIDATION_AV1;
         }
 
-        // Enable direct submit on supported hardware
-        if (directSubmit) {
+        if (isPyrowaveRequested()) {
+            // PyroWave frames stand alone, so ones that lost packets are still worth decoding.
+            // Decoding takes milliseconds, so it stays off the receive thread (no direct submit).
+            capabilities |= MoonBridge.CAPABILITY_PARTIAL_FRAMES;
+        }
+        else if (directSubmit) {
+            // Enable direct submit on supported hardware
             capabilities |= MoonBridge.CAPABILITY_DIRECT_SUBMIT;
         }
 
         return capabilities;
+    }
+
+    public void setStreamSampleListener(StreamSampleListener listener) {
+        streamSampleListener = listener;
+    }
+
+    /** Whether any video frame arrived on this stream */
+    public boolean hasReceivedFrames() {
+        return globalVideoStats.totalFramesReceived > 0 || activeWindowVideoStats.totalFramesReceived > 0;
     }
 
     public int getAverageEndToEndLatency() {
@@ -2111,10 +2650,62 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         return (int)(globalVideoStats.decoderTimeMs / globalVideoStats.totalFramesReceived);
     }
 
+    // KEY_MAX_INPUT_SIZE we asked the decoder for, 0 when we left its default (PEN-10)
+    private int requestedInputBufferSize;
+
+    private void logInputBufferSize(int requested) {
+        String actual = "unknown";
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && videoDecoder != null) {
+            try {
+                MediaFormat input = videoDecoder.getInputFormat();
+                if (input.containsKey(MediaFormat.KEY_MAX_INPUT_SIZE)) {
+                    actual = String.valueOf(input.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE));
+                }
+            } catch (RuntimeException ignored) {
+            }
+        }
+        LimeLog.info("Decoder MediaFormat: KEY_MAX_INPUT_SIZE=" + (requested > 0 ? String.valueOf(requested) : "default")
+                + " (decoder reports " + actual + ", mode " + prefs.decoderInputBufferMode + ")");
+    }
+
     /**
-     * Cumulative counters for the setup wizard's trial streams (PEN-8):
+     * A frame didn't fit the input buffer: ask for a bigger one and restart the decoder instead of
+     * ending the stream. Returns false when growing can't help.
+     */
+    private boolean growInputBuffer(int requiredSize, int capacity) {
+        if (prefs.decoderInputBufferMode == DecoderInputBufferSizing.MODE_OFF
+                || codecRecoveryAttempts >= CR_MAX_TRIES || configuredFormat == null) {
+            return false;
+        }
+        int newSize = DecoderInputBufferSizing.expandedInputSize(requiredSize, capacity, requestedInputBufferSize);
+        if (newSize <= 0) {
+            return false;
+        }
+        LimeLog.warning("Growing decoder input buffer: frame of " + requiredSize + " bytes, buffer "
+                + capacity + ", restarting with KEY_MAX_INPUT_SIZE=" + newSize);
+        // Set the format before asking for the restart, which reconfigures with configuredFormat.
+        // If a reset is already pending it uses this format too.
+        configuredFormat.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, newSize);
+        requestedInputBufferSize = newSize;
+        if (!codecRecoveryType.compareAndSet(CR_RECOVERY_TYPE_NONE, CR_RECOVERY_TYPE_RESTART)) {
+            codecRecoveryType.compareAndSet(CR_RECOVERY_TYPE_FLUSH, CR_RECOVERY_TYPE_RESTART);
+        }
+        return true;
+    }
+
+    // Stream bitrate for the stats overlay (PEN-10); null hides the line
+    private volatile String streamBitrateLabel;
+
+    public void setStreamBitrateLabel(String label) {
+        streamBitrateLabel = label;
+    }
+
+    /**
+     * Cumulative counters for the setup wizard's trial streams (PEN-8) and automatic bitrate:
      * {decoderTimeMs, framesReceived, framesRendered, totalFrames, framesLost, uptimeMs}.
-     * Updated about once a second when the stats window flips.
+     * framesLost counts frame-number gaps at submit: network loss, but also frames the client's
+     * decode-unit queue flushed when the decoder fell behind. Updated about once a second when
+     * the stats window flips.
      */
     public long[] getProbeCounters() {
         VideoStats s = globalVideoStats;
@@ -2129,6 +2720,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             return hevcDecoder.getName();
         } else if ((videoFormat & MoonBridge.VIDEO_FORMAT_MASK_AV1) != 0 && av1Decoder != null) {
             return av1Decoder.getName();
+        } else if (pyrowave) {
+            return "PyroWave (Vulkan)";
         }
         return "";
     }
@@ -2206,7 +2799,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             str += "AVC Decoder: "+((renderer.avcDecoder != null) ? renderer.avcDecoder.getName():"(none)")+DELIMITER;
             str += "HEVC Decoder: "+((renderer.hevcDecoder != null) ? renderer.hevcDecoder.getName():"(none)")+DELIMITER;
             str += "AV1 Decoder: "+((renderer.av1Decoder != null) ? renderer.av1Decoder.getName():"(none)")+DELIMITER;
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && renderer.avcDecoder != null) {
+            if (renderer.avcDecoder != null) {
                 Range<Integer> avcWidthRange = renderer.avcDecoder.getCapabilitiesForType("video/avc").getVideoCapabilities().getSupportedWidths();
                 str += "AVC supported width range: "+avcWidthRange+DELIMITER;
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -2218,7 +2811,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     }
                 }
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && renderer.hevcDecoder != null) {
+            if (renderer.hevcDecoder != null) {
                 Range<Integer> hevcWidthRange = renderer.hevcDecoder.getCapabilitiesForType("video/hevc").getVideoCapabilities().getSupportedWidths();
                 str += "HEVC supported width range: "+hevcWidthRange+DELIMITER;
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -2230,7 +2823,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     }
                 }
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && renderer.av1Decoder != null) {
+            if (renderer.av1Decoder != null) {
                 Range<Integer> av1WidthRange = renderer.av1Decoder.getCapabilitiesForType("video/av01").getVideoCapabilities().getSupportedWidths();
                 str += "AV1 supported width range: "+av1WidthRange+DELIMITER;
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -2279,17 +2872,15 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             str += "Average hardware decoder latency: "+renderer.getAverageDecoderLatency()+"ms"+DELIMITER;
             str += "Frame pacing mode: "+renderer.prefs.framePacing+DELIMITER;
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                if (originalException instanceof CodecException) {
-                    CodecException ce = (CodecException) originalException;
+            if (originalException instanceof CodecException) {
+                CodecException ce = (CodecException) originalException;
 
-                    str += "Diagnostic Info: "+ce.getDiagnosticInfo()+DELIMITER;
-                    str += "Recoverable: "+ce.isRecoverable()+DELIMITER;
-                    str += "Transient: "+ce.isTransient()+DELIMITER;
+                str += "Diagnostic Info: " + ce.getDiagnosticInfo() + DELIMITER;
+                str += "Recoverable: " + ce.isRecoverable() + DELIMITER;
+                str += "Transient: " + ce.isTransient() + DELIMITER;
 
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                        str += "Codec Error Code: "+ce.getErrorCode()+DELIMITER;
-                    }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    str += "Codec Error Code: " + ce.getErrorCode() + DELIMITER;
                 }
             }
 
