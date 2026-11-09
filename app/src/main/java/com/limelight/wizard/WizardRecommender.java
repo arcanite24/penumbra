@@ -24,6 +24,8 @@ public final class WizardRecommender {
     public static final String KEY_VDISPLAY = "checkbox_use_virtual_display";
     public static final String KEY_ULL = "checkbox_ultra_low_latency";
     public static final String KEY_REDUCE_REFRESH = "checkbox_reduce_refresh_rate";
+    /** PyroWave frame pace sent to the host as x-ss-video[0].pyrowavePaceMbps; 0 leaves it to the host. */
+    public static final String KEY_PACE = "pyrowave_pace_mbps";
 
     /** The bitrate slider's top; PyroWave streams can go this high. */
     static final int MAX_KBPS = 1000000;
@@ -46,6 +48,8 @@ public final class WizardRecommender {
         public boolean virtualDisplay;
         public boolean ultraLowLatency;
         public Boolean reduceRefresh; // null: leave as is
+        /** PyroWave frame pace from the UDP probe, Mbps; 0 when not measured. */
+        public int paceMbps;
         public final Map<String, String> reasons = new LinkedHashMap<>();
         public final List<String> notes = new ArrayList<>();
     }
@@ -135,7 +139,7 @@ public final class WizardRecommender {
         // PyroWave needs about 220 Mbps at 1080p60; use it only when the link has room for that
         int pwLink = r.pyrowaveLinkMbps();
         boolean pyrowave = r.pyrowaveDecoder && r.hostPyrowave() && pwLink > 0
-                && pyrowaveKbps(p.width, p.height, p.fps, false) <= pwLink * 1000 * 0.65
+                && pyrowaveKbps(p.width, p.height, p.fps, false) <= r.pyrowaveBudgetKbps()
                 && r.power != WizardReport.POWER_BATTERY;
         String classic;
         if (hevc) classic = "forceh265";
@@ -144,9 +148,16 @@ public final class WizardRecommender {
         p.fallbackCodec = classic;
         if (pyrowave) {
             p.codec = "forcepyrowave";
-            p.reasons.put(KEY_CODEC, "PyroWave on both ends and a " + (r.link == WizardReport.LINK_ETHERNET
-                    ? "wired" : pwLink + " Mbps Wi-Fi") + " link: every frame stands alone, so a lost packet "
+            p.reasons.put(KEY_CODEC, "PyroWave on both ends and a " + (r.udpMeasured()
+                    ? "link that carried " + pwLink + " Mbps of UDP cleanly"
+                    : (r.link == WizardReport.LINK_ETHERNET ? "wired" : pwLink + " Mbps Wi-Fi") + " link")
+                    + ": every frame stands alone, so a lost packet "
                     + "never freezes the picture, and it decodes in a few ms on the GPU.");
+            if (r.udpPaceKbps > 0) {
+                p.paceMbps = r.udpPaceKbps / 1000;
+                p.reasons.put(KEY_PACE, "Frame-shaped UDP bursts arrived intact when sent at " + p.paceMbps
+                        + " Mbps, so the host paces each frame's packets at that rate.");
+            }
         } else if (hevc) {
             p.codec = "forceh265";
             p.reasons.put(KEY_CODEC, "Hardware HEVC on both ends: same quality as H.264 at about 40% less bitrate"
@@ -157,6 +168,15 @@ public final class WizardRecommender {
         } else {
             p.codec = "neverh265";
             p.reasons.put(KEY_CODEC, "H.264 is the only codec both devices share in hardware.");
+        }
+        if (r.pyrowaveDecoder && r.hostPyrowave() && r.udpProbeRan) {
+            if (!pyrowave && r.udpMeasured()) {
+                p.notes.add("PyroWave wasn't picked: the UDP test passed at " + WizardProbes.mbps(r.udpCapacityKbps)
+                        + ", less than PyroWave needs at this resolution and frame rate.");
+            } else if (!r.udpMeasured()) {
+                p.notes.add("The UDP test found no clean rate" + (r.udpNote != null ? " (" + r.udpNote + ")" : "")
+                        + ", so PyroWave was judged from the link speed instead and no frame pace was saved.");
+            }
         }
 
         // HDR
@@ -243,12 +263,14 @@ public final class WizardRecommender {
             double kbps = pyrowaveKbps(p.width, p.height, p.fps, p.hdr);
             if (r.priority == WizardReport.PRIORITY_IMAGE) kbps *= 1.2;
             int linkMbps = r.pyrowaveLinkMbps();
-            double cap = linkMbps * 1000 * 0.65;
+            double cap = r.pyrowaveBudgetKbps();
             String why = String.format(Locale.US, "PyroWave sized for %d×%d at %d fps%s", p.width, p.height, p.fps,
                     p.hdr ? " in HDR" : "");
             if (kbps > cap) {
                 kbps = cap;
-                why += ", capped at two thirds of your " + (r.link == WizardReport.LINK_ETHERNET ? "gigabit" : linkMbps + " Mbps")
+                why += r.udpMeasured()
+                        ? ", capped at 90% of the " + WizardProbes.mbps(r.udpCapacityKbps) + " the UDP test carried cleanly"
+                        : ", capped at two thirds of your " + (r.link == WizardReport.LINK_ETHERNET ? "gigabit" : linkMbps + " Mbps")
                         + " link";
             }
             p.reasons.put(KEY_BITRATE, why + ".");
@@ -285,6 +307,10 @@ public final class WizardRecommender {
                 || (r.pingSamples > 0 && !r.hostOnLan)) && cap > 20000) {
             cap = 20000;
             capWhy = "a typical upload limit for remote play";
+        }
+        if (r.udpMeasured() && cap > r.udpCapacityKbps * 0.5) {
+            cap = r.udpCapacityKbps * 0.5;
+            capWhy = "half of the " + WizardProbes.mbps(r.udpCapacityKbps) + " the UDP test carried cleanly";
         }
         if (kbps > cap) {
             kbps = cap;
@@ -353,6 +379,7 @@ public final class WizardRecommender {
         b.putString(KEY_PACING, t.pacing);
         b.putBoolean(KEY_VDISPLAY, p.virtualDisplay);
         b.putBoolean(KEY_ULL, p.ultraLowLatency);
+        b.putInt(KEY_PACE, p.paceMbps);
         b.putBoolean("checkbox_enable_perf_overlay", true);
         b.putBoolean("checkbox_enable_post_stream_toast", false);
         return b;
@@ -369,6 +396,7 @@ public final class WizardRecommender {
             }
             boolean ran = seen != null && seen.decoder != null && seen.decoder.startsWith("PyroWave");
             p.codec = p.fallbackCodec;
+            p.paceMbps = 0;
             p.reasons.put(KEY_CODEC, ran
                     ? String.format(Locale.US, "PyroWave lost frames on this link (%.1f%% at %s), so this uses %s, which copes better.",
                             seen.lossPct, WizardProbes.mbps(seen.bitrateKbps), codecName(p.codec))
@@ -507,7 +535,17 @@ public final class WizardRecommender {
             recs.add(new Rec(KEY_REDUCE_REFRESH, "Lower screen refresh", p.reduceRefresh, onOff(p.reduceRefresh),
                     onOff(current.getBoolean(KEY_REDUCE_REFRESH, false)), p.reasons.get(KEY_REDUCE_REFRESH)));
         }
+        int currentPace = current.getInt(KEY_PACE, 0);
+        if ("forcepyrowave".equals(p.codec) && (p.paceMbps > 0 || currentPace > 0)) {
+            recs.add(new Rec(KEY_PACE, "PyroWave frame pace", p.paceMbps, paceName(p.paceMbps), paceName(currentPace),
+                    p.reasons.containsKey(KEY_PACE) ? p.reasons.get(KEY_PACE)
+                            : "No pace passed the UDP test, so the host keeps its own."));
+        }
         return recs;
+    }
+
+    static String paceName(int mbps) {
+        return mbps > 0 ? mbps + " Mbps" : "Host default";
     }
 
     static String onOff(boolean b) {

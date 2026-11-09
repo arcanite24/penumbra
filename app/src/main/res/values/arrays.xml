@@ -139,6 +139,16 @@
         <item>fsr</item>
         <item>sgsr</item>
     </string-array>
+    <string-array name="decoder_input_buffer_names">
+        <item>@string/decoder_input_buffer_auto</item>
+        <item>@string/decoder_input_buffer_force</item>
+        <item>@string/decoder_input_buffer_off</item>
+    </string-array>
+    <string-array name="decoder_input_buffer_values" translatable="false">
+        <item>auto</item>
+        <item>force</item>
+        <item>off</item>
+    </string-array>
     <string-array name="video_format_values" translatable="false">
         <item>auto</item>
         <item>forceav1</item>

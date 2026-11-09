@@ -1035,4 +1035,125 @@ public class NvHTTP {
             return false;
         }
     }
+
+    // ---------------------------------------------------------------- Vibepollo extensions (PEN-10)
+
+    /** What /api/abr/capabilities reported, or null when the host doesn't serve it. */
+    public static class BitrateCapabilities {
+        /** The host runs its own adaptive bitrate; a client controller must not run alongside it. */
+        public final boolean hostAdaptive;
+        public final int version;
+        public final List<String> features;
+
+        public BitrateCapabilities(boolean hostAdaptive, int version, List<String> features) {
+            this.hostAdaptive = hostAdaptive;
+            this.version = version;
+            this.features = features;
+        }
+
+        /** The host changes the bitrate of a running stream through /bitrate. */
+        public boolean runtimeBitrate() {
+            return features.contains("runtime_bitrate");
+        }
+
+        @Override
+        public String toString() {
+            return "supported=" + hostAdaptive + " version=" + version + " features=" + features;
+        }
+    }
+
+    /**
+     * Vibepollo (and Foundation Sunshine) serve this over paired HTTPS. "supported" means the host
+     * makes its own bitrate decisions; Vibepollo reports false, leaving them to the client.
+     * Returns null on 404 or when the body isn't the expected JSON.
+     */
+    public BitrateCapabilities getBitrateCapabilities() throws IOException {
+        String body;
+        try {
+            body = openHttpConnectionToString(httpClientLongConnectTimeout, getHttpsUrl(true), "api/abr/capabilities");
+        } catch (FileNotFoundException e) {
+            return null;
+        }
+        try {
+            org.json.JSONObject json = new org.json.JSONObject(body);
+            List<String> features = new ArrayList<>();
+            org.json.JSONArray array = json.optJSONArray("features");
+            if (array != null) {
+                for (int i = 0; i < array.length(); i++) {
+                    features.add(array.optString(i));
+                }
+            }
+            // A host that adapts the link rate itself may say so only through a feature
+            boolean hostAdaptive = json.optBoolean("supported", false)
+                    || features.contains("host_abr") || features.contains("link_rate_adaptation");
+            return new BitrateCapabilities(hostAdaptive, json.optInt("version", 0), features);
+        } catch (org.json.JSONException e) {
+            LimeLog.warning("Unexpected /api/abr/capabilities response: " + body);
+            return null;
+        }
+    }
+
+    /**
+     * Changes the bitrate of this client's running stream (Vibepollo GET /bitrate, applied live).
+     * Returns the bitrate the host applied, which it may have clamped to its own ceiling.
+     * Throws HostHttpResponseException with the host's status (403 permission, 404 no session).
+     */
+    public int setStreamBitrate(int kbps) throws IOException, XmlPullParserException {
+        String xmlStr = openHttpConnectionToString(httpClientLongConnectTimeout, getHttpsUrl(true), "bitrate",
+                "bitrate=" + kbps);
+        String applied = getXmlString(xmlStr, "bitrate", true);
+        try {
+            return Integer.parseInt(applied.trim());
+        } catch (NumberFormatException e) {
+            throw new XmlPullParserException("Bad bitrate in host response: " + applied);
+        }
+    }
+
+    /** The host's address as this client reaches it. */
+    public String getHostAddress() {
+        return baseUrlHttp.host();
+    }
+
+    /**
+     * Starts a paired HTTPS GET and returns the response as soon as its headers arrive, for
+     * requests whose body completes only after more work (the PyroWave UDP probe). The caller
+     * must close it. Throws on a non-2xx status.
+     */
+    public Response openHttpsStreaming(String path, String query, int readTimeoutMs) throws IOException {
+        OkHttpClient client = httpClientLongConnectTimeout.newBuilder()
+                .readTimeout(readTimeoutMs, TimeUnit.MILLISECONDS)
+                .build();
+        HttpUrl completeUrl = getCompleteUrl(getHttpsUrl(true), path, query);
+        Response response = performAndroidTlsHack(client).newCall(new Request.Builder().url(completeUrl).get().build()).execute();
+        if (!response.isSuccessful()) {
+            int code = response.code();
+            String message = response.message();
+            ResponseBody body = response.body();
+            if (body != null) {
+                try {
+                    String text = body.string();
+                    if (!text.isEmpty()) message = text;
+                } catch (IOException ignored) {
+                }
+            }
+            response.close();
+            throw new HostHttpResponseException(code, message);
+        }
+        return response;
+    }
+
+    /** Checks a host XML reply's status_code like every other request; throws HostHttpResponseException. */
+    public static String getXmlField(String xml, String tag) throws IOException, XmlPullParserException {
+        return getXmlString(xml, tag, false);
+    }
+
+    /** Reads a numeric serverinfo field, or the fallback when it's missing or not a number. */
+    public static long getServerInfoLong(String serverInfo, String tag, long fallback) {
+        try {
+            String value = getXmlString(serverInfo, tag, false);
+            return value != null ? Long.parseLong(value.trim()) : fallback;
+        } catch (Exception e) {
+            return fallback;
+        }
+    }
 }

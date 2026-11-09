@@ -21,6 +21,7 @@ import android.os.SystemClock;
 import android.util.Range;
 import android.view.Display;
 
+import com.limelight.LimeLog;
 import com.limelight.binding.PlatformBinding;
 import com.limelight.computers.ComputerManagerService;
 import com.limelight.nvstream.http.ComputerDetails;
@@ -379,6 +380,11 @@ public final class WizardProbes {
             r.hostVirtualDisplay = http.getServerSupportsVDisplay(info);
             r.hostVirtualDisplayReady = http.getServerVDisplayDriverReady(info);
             r.hostRunningApp = http.getCurrentGame(info) != 0;
+            // Vibepollo's UDP burst calibration (only in paired serverinfo, with PyroWave enabled)
+            r.hostUdpProbeVersion = (int) NvHTTP.getServerInfoLong(info, "PyroWaveUdpProbeVersion", 0);
+            r.hostUdpHandshake = NvHTTP.getServerInfoLong(info, "PyroWaveUdpHandshakeVersion", 0) >= 1;
+            r.hostUdpBurst = NvHTTP.getServerInfoLong(info, "PyroWaveUdpProbeBurstVersion", 0) >= 1;
+            r.hostLinkMbps = (int) NvHTTP.getServerInfoLong(info, "PyroWaveHostLinkMbps", 0);
 
             facts.add(new Fact("Host", computer.name,
                     joinNonEmpty(r.hostVersion != null ? "Server " + r.hostVersion : null,
@@ -516,6 +522,145 @@ public final class WizardProbes {
         }
         facts.add(new Fact("Dropped probes", lost + " of " + samples, null,
                 lost == 0 ? GOOD : lost <= samples / 20 ? WARN : BAD));
+        return facts;
+    }
+
+    // ---------------------------------------------------------------- UDP burst calibration (PEN-10)
+
+    public interface ProgressListener {
+        void onProgress(String text);
+    }
+
+    /** The host offers Vibepollo's /pyrowave-udp-probe and PyroWave could be picked on this link. */
+    public static boolean canProbeUdp(WizardReport r) {
+        return r.hostReachable && r.hostUdpProbeVersion >= 1 && r.hostPyrowave() && r.pyrowaveDecoder
+                && r.hostOnLan && r.place != WizardReport.PLACE_REMOTE
+                && (r.link == WizardReport.LINK_ETHERNET || r.link == WizardReport.LINK_WIFI);
+    }
+
+    /** The fastest the link could go, kbps: the client's link speed, bounded by the host's wired link. */
+    static int udpLinkKbps(WizardReport r) {
+        int mbps = r.link == WizardReport.LINK_ETHERNET ? 1000 : Math.max(0, r.wifiLinkMbps);
+        if (r.hostLinkMbps > 0) mbps = mbps > 0 ? Math.min(mbps, r.hostLinkMbps) : r.hostLinkMbps;
+        return (int) Math.min(PyroWaveUdpGrade.MAX_KBPS, mbps * 1000L);
+    }
+
+    /**
+     * Measures how much UDP the host can burst to this device with Vibepollo's probe, then which
+     * frame pace still delivers whole frames. Sets r.udp*; takes 20-40 s. The host refuses while
+     * it streams, so this runs before the trial streams.
+     */
+    @SuppressLint("DefaultLocale")
+    public static List<Fact> probeUdp(Context context, ComputerDetails computer,
+                                      ComputerManagerService.ComputerManagerBinder binder,
+                                      WizardReport r, final ProgressListener listener) {
+        List<Fact> facts = new ArrayList<>();
+        int linkKbps = udpLinkKbps(r);
+        if (linkKbps < PyroWaveUdpGrade.MIN_KBPS) {
+            facts.add(new Fact("UDP burst test", "Skipped", "The link speed is unknown", INFO));
+            return facts;
+        }
+        WifiManager.WifiLock lock = null;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            try {
+                WifiManager wm = (WifiManager) context.getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+                lock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_LOW_LATENCY, "Penumbra wizard UDP probe");
+                lock.setReferenceCounted(false);
+                lock.acquire();
+            } catch (Exception e) {
+                lock = null;
+            }
+        }
+        try {
+            NvHTTP http = new NvHTTP(ServerHelper.getCurrentAddressFromComputer(computer), computer.httpsPort,
+                    binder.getUniqueId(), computer.serverCert, PlatformBinding.getCryptoProvider(context));
+            final PyroWaveUdpProbe udp = new PyroWaveUdpProbe(http, r.hostUdpHandshake);
+            final int[] count = {0};
+            PyroWaveUdpGrade.Probe probe = (kbps, fps, paceKbps) -> {
+                count[0]++;
+                if (listener != null) {
+                    listener.onProgress(fps > 0
+                            ? String.format(Locale.US, "UDP test %d · %s frames at %s pace…", count[0], mbps(kbps), mbps(paceKbps))
+                            : String.format(Locale.US, "UDP test %d · %s…", count[0], mbps(kbps)));
+                }
+                PyroWaveUdpGrade.Result result = udp.run(kbps, fps, paceKbps);
+                if (listener != null && fps > 0) {
+                    // Pace runs don't depend on the baseline; capacity runs report once graded
+                    listener.onProgress(String.format(Locale.US, "UDP test %d · %s · %s", count[0], mbps(kbps),
+                            result.passed() ? "clean" : result.failure()));
+                }
+                return result;
+            };
+            PyroWaveUdpGrade.Graded graded = result -> {
+                LimeLog.info("PyroWave UDP probe graded: " + result);
+                if (listener != null) {
+                    listener.onProgress(String.format(Locale.US, "UDP test %d · %s · %s", count[0], mbps(result.kbps),
+                            result.passed() ? "clean" : result.failure()));
+                }
+            };
+
+            // Probe no higher than PyroWave would use here, with 30% headroom
+            WizardRecommender.Plan planned = WizardRecommender.plan(r);
+            double plannedKbps = WizardRecommender.pyrowaveKbps(planned.width, planned.height, planned.fps, planned.hdr)
+                    * (r.priority == WizardReport.PRIORITY_IMAGE ? 1.2 : 1.0);
+            int capKbps = (int) Math.min(linkKbps, plannedKbps * 1.3);
+            int start = (int) (capKbps * 0.6);
+            PyroWaveUdpGrade.Capacity cap = PyroWaveUdpGrade.searchCapacity(PyroWaveUdpGrade.BASELINE_KBPS, start,
+                    capKbps, 10000, 10, probe, graded);
+            r.udpProbeRan = cap.last != null && (cap.last.expected > 0 || cap.kbps > 0);
+            r.udpCapacityKbps = cap.kbps;
+            if (cap.kbps <= 0) {
+                r.udpNote = cap.last != null ? cap.last.failure() : "no probe ran";
+            }
+            String baseline = cap.baseline != null && !Double.isNaN(cap.baseline.delayP99Ms)
+                    ? String.format(Locale.US, "%.1f ms", cap.baseline.delayP99Ms) : "none";
+            LimeLog.info("PyroWave UDP calibration: " + (cap.kbps > 0 ? cap.kbps + " kbps" + (cap.atCap ? " (at the cap)" : "")
+                    : "no rate (" + r.udpNote + "), falling back to the link-speed rule")
+                    + " after " + cap.probes + " probes, baseline p99 " + baseline
+                    + ", cap " + capKbps + " kbps (planned PyroWave " + Math.round(plannedKbps) + " kbps), link " + linkKbps + " kbps");
+            if (!r.udpProbeRan) {
+                facts.add(new Fact("UDP burst test", "Failed",
+                        joinNonEmpty(r.udpNote, "PyroWave is judged from the link speed instead"), WARN));
+                return facts;
+            }
+            if (cap.kbps <= 0) {
+                facts.add(new Fact("UDP burst capacity", "No clean rate",
+                        joinNonEmpty(r.udpNote, "PyroWave is judged from the link speed instead; no frame pace saved"), WARN));
+                return facts;
+            }
+            facts.add(new Fact("UDP burst capacity", (cap.atCap ? "≥ " : "") + mbps(cap.kbps),
+                    String.format(Locale.US, "Highest clean rate: ≤0.1%% loss, ≤1%% in any 100 ms, p99 within %.0f ms of the %s baseline at %s · %d tests%s",
+                            PyroWaveUdpGrade.DELAY_P99_MARGIN_MS, baseline, mbps(cap.baseline.kbps), cap.probes,
+                            cap.atCap ? " · stopped at 1.3× what PyroWave needs here" : ""),
+                    cap.kbps >= 300000 || cap.atCap ? GOOD : cap.kbps >= 150000 ? OK : WARN));
+
+            if (r.hostUdpBurst) {
+                WizardRecommender.Plan plan = WizardRecommender.plan(r);
+                int fps = Math.max(10, Math.min(500, plan.fps));
+                int image = (int) Math.round(WizardRecommender.pyrowaveKbps(plan.width, plan.height, fps, false));
+                int kbps = Math.max(PyroWaveUdpGrade.MIN_KBPS,
+                        PyroWaveUdpGrade.round5(Math.min(cap.kbps * 0.8, image)));
+                // A frame must leave well within its frame interval
+                int floor = (int) (kbps * 1.25);
+                PyroWaveUdpGrade.Pace pace = PyroWaveUdpGrade.searchPace(kbps, fps, linkKbps, floor, 6, probe);
+                r.udpPaceKbps = pace.paceKbps;
+                LimeLog.info("PyroWave UDP pace: " + (pace.paceKbps > 0 ? pace.paceKbps + " kbps" : "none passed")
+                        + " for " + kbps + " kbps at " + fps + " fps after " + pace.probes + " probes");
+                facts.add(new Fact("PyroWave frame pace", pace.paceKbps > 0 ? mbps(pace.paceKbps) : "Host default",
+                        pace.paceKbps > 0
+                                ? String.format(Locale.US, "Whole %d fps frames arrived intact when sent at this rate", fps)
+                                : (pace.last != null ? pace.last.failure() : null),
+                        pace.paceKbps > 0 ? GOOD : INFO));
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (Exception e) {
+            facts.add(new Fact("UDP burst test", "Failed", e.getMessage(), WARN));
+        } finally {
+            if (lock != null) {
+                lock.release();
+            }
+        }
         return facts;
     }
 

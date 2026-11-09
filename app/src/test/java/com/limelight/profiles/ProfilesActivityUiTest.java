@@ -55,7 +55,7 @@ public class ProfilesActivityUiTest {
         ActivityController<ProfilesActivity> controller = Robolectric.buildActivity(ProfilesActivity.class).setup();
         ProfilesActivity activity = controller.get();
 
-        ImageButton fab = activity.findViewById(R.id.addProfileFab);
+        android.view.View fab = activity.findViewById(R.id.addProfileButton);
         assertNotNull(fab);
         fab.performClick();
 

@@ -34,6 +34,7 @@ public class StreamConfiguration {
     private boolean enableUltraLowLatency;
     // A recovery attempt: only resume the app already running, never launch or quit one
     private boolean resumeOnly;
+    private int pyrowavePaceMbps;
 
     public static class Builder {
         private StreamConfiguration config = new StreamConfiguration();
@@ -116,6 +117,12 @@ public class StreamConfiguration {
 
         public StreamConfiguration.Builder setPersistGamepadsAfterDisconnect(boolean value) {
             config.persistGamepadsAfterDisconnect = value;
+            return this;
+        }
+
+        /** PyroWave frame pace for the host (x-ss-video[0].pyrowavePaceMbps); 0 leaves it to the host. */
+        public StreamConfiguration.Builder setPyrowavePaceMbps(int paceMbps) {
+            config.pyrowavePaceMbps = paceMbps;
             return this;
         }
 
@@ -253,6 +260,10 @@ public class StreamConfiguration {
 
     public boolean getPersistGamepadsAfterDisconnect() {
         return persistGamepadsAfterDisconnect;
+    }
+
+    public int getPyrowavePaceMbps() {
+        return pyrowavePaceMbps;
     }
 
     public int getClientRefreshRateX100() {

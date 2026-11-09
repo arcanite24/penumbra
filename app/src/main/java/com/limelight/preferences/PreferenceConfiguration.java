@@ -268,6 +268,8 @@ public class PreferenceConfiguration {
     public boolean onlyL3R3;
     public boolean showGuideButton;
     public boolean enableHdr;
+    /** Client automatic bitrate through the host's live /bitrate (PEN-10); off by default. */
+    public boolean autoBitrate;
     public boolean enablePip;
 
     public float parallax_depth;
@@ -394,6 +396,10 @@ public class PreferenceConfiguration {
     public static final int UPSCALER_FSR = 1;
     public static final int UPSCALER_SGSR = 2;
     public int upscaler = UPSCALER_OFF;
+    // DecoderInputBufferSizing.MODE_* (PEN-10)
+    public int decoderInputBufferMode = 0;
+    /** Frame pace for PyroWave streams from the Tune wizard's UDP test, Mbps; 0: the host's default (PEN-10). */
+    public int pyrowavePaceMbps;
     public boolean absoluteMouseMode;
     public boolean enableAudioFx;
     public boolean reduceRefreshRate;
@@ -888,6 +894,8 @@ private static int getFramePacingValue(Context context) {
 
         config.videoFormat = getVideoFormatValue(context);
         config.framePacing = getFramePacingValue(context);
+        config.decoderInputBufferMode = com.limelight.binding.video.DecoderInputBufferSizing.modeFromPreference(
+                prefs.getString("decoder_input_buffer", "auto"));
         {
             String lateFrames = prefs.getString("pyrowave_late_frames", "balanced");
             config.pyrowaveLateFrames = "off".equals(lateFrames) ? PYROWAVE_LATE_FRAMES_OFF :
@@ -898,6 +906,7 @@ private static int getFramePacingValue(Context context) {
             String upscaler = prefs.getString(UPSCALER_PREF_STRING, "off");
             config.upscaler = "fsr".equals(upscaler) ? UPSCALER_FSR :
                     "sgsr".equals(upscaler) ? UPSCALER_SGSR : UPSCALER_OFF;
+            config.pyrowavePaceMbps = Math.max(0, prefs.getInt("pyrowave_pace_mbps", 0));
         }
         config.preferLowerDelays = getPreferLowerDelays(context);
 
@@ -960,6 +969,7 @@ private static int getFramePacingValue(Context context) {
         config.hideOSCWhenHasGamepad = prefs.getBoolean(CHECKBOX_HIDE_OSC_WHEN_HAS_GAMEPAD, DEFAULT_HIDE_OSC_WHEN_HAS_GAMEPAD);
         config.onlyL3R3 = prefs.getBoolean(ONLY_L3_R3_PREF_STRING, ONLY_L3_R3_DEFAULT);
         config.showGuideButton = prefs.getBoolean(SHOW_GUIDE_BUTTON_PREF_STRING, SHOW_GUIDE_BUTTON_DEFAULT);
+        config.autoBitrate = prefs.getBoolean("checkbox_auto_bitrate", false);
         config.enableHdr = prefs.getBoolean(ENABLE_HDR_PREF_STRING, DEFAULT_ENABLE_HDR) && !isShieldAtvFirmwareWithBrokenHdr();
         config.enablePip = prefs.getBoolean(ENABLE_PIP_PREF_STRING, DEFAULT_ENABLE_PIP);
         config.enablePerfOverlay = prefs.getBoolean(ENABLE_PERF_OVERLAY_STRING, DEFAULT_ENABLE_PERF_OVERLAY);
