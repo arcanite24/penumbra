@@ -828,6 +828,11 @@
     <!-- Live bitrate (PEN-10) -->
     <string name="perf_overlay_bitrate">Bitrate: %1$s</string>
     <string name="game_menu_bitrate">Bitrate · %1$s</string>
+    <string name="game_menu_resolution">Resolution · %1$s</string>
+    <string name="resolution_menu_title">Stream resolution (reconnects)</string>
+    <string name="resolution_native_option">Native (%1$s)</string>
+    <string name="resolution_current_option">%1$s (current)</string>
+    <string name="resolution_switching">Reconnecting at %1$s…</string>
     <string name="bitrate_dialog_title">Stream bitrate</string>
     <string name="bitrate_dialog_message">The host changes the bitrate without restarting the stream. It may cap it at its own limit.</string>
     <string name="bitrate_dialog_apply">Apply</string>

@@ -273,6 +273,11 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     // values applied on top of the user's settings for this stream only. The stream is
     // measured, the host app is quit, and the numbers come back as the activity result.
     public static final String EXTRA_PROBE_OVERRIDES = "ProbeOverrides";
+    // Resolution hot-switch (PEN-10): the stream is reconnected with these instead of the saved
+    // settings. Vibepollo can't change the resolution of a running stream, so the switch ends this
+    // stream (without quitting the game) and starts a new one, which the host resumes.
+    public static final String EXTRA_RESOLUTION_OVERRIDE = "PenumbraResolution";
+    public static final String EXTRA_BITRATE_OVERRIDE = "PenumbraBitrateKbps";
     public static final String EXTRA_PROBE_WARMUP_MS = "ProbeWarmupMs";
     public static final String EXTRA_PROBE_MEASURE_MS = "ProbeMeasureMs";
     public static final String RESULT_PROBE_RECEIVED_FPS = "ProbeReceivedFps";
@@ -399,6 +404,7 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         // Read the stream preferences
         prefConfig = PreferenceConfiguration.readPreferences(this);
         tombstonePrefs = Game.this.getSharedPreferences("DecoderTombstone", 0);
+        applyResolutionSwitchOverrides();
 
         if (prefConfig.fullScreen) {
             // Full-screen
@@ -1814,6 +1820,10 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
         // Destroy the capture provider
         inputCaptureProvider.destroy();
         streamContainer.onDestroy();
+
+        // Resolution hot-switch: this stream is stopping (NvConnection lets the next one start
+        // only after it's done), so the new one can start now
+        startResolutionSwitch();
     }
 
     @Override
@@ -4517,6 +4527,110 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
     public void requestStreamBitrate(int kbps) {
         if (streamBitrate != null) {
             streamBitrate.request(kbps, "menu", null);
+        }
+    }
+
+    // Resolution hot-switch (PEN-10)
+    private Intent resolutionSwitchIntent;
+
+    private void applyResolutionSwitchOverrides() {
+        String res = getIntent().getStringExtra(EXTRA_RESOLUTION_OVERRIDE);
+        int kbps = getIntent().getIntExtra(EXTRA_BITRATE_OVERRIDE, 0);
+        if (res == null && kbps <= 0) {
+            return;
+        }
+        if (res != null) {
+            int[] wh = parseResolution(res);
+            if (wh != null) {
+                prefConfig.width = wh[0];
+                prefConfig.height = wh[1];
+            }
+        }
+        if (kbps > 0) {
+            prefConfig.bitrate = kbps;
+            prefConfig.meteredBitrate = kbps;
+        }
+        LimeLog.info("Resolution switch: reconnecting at " + prefConfig.width + "x" + prefConfig.height
+                + ", " + prefConfig.bitrate + " kbps");
+    }
+
+    static int[] parseResolution(String value) {
+        int x = value == null ? -1 : value.indexOf('x');
+        if (x <= 0) return null;
+        try {
+            int w = Integer.parseInt(value.substring(0, x).trim());
+            int h = Integer.parseInt(value.substring(x + 1).trim());
+            return w >= 256 && h >= 144 && w <= 8192 && h <= 8192 ? new int[]{w, h} : null;
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    /** The menu can switch resolution: a normal stream on the phone's own screen. */
+    public boolean isResolutionSwitchAvailable() {
+        return connected && !probeMode && !onExternelDisplay && conn != null;
+    }
+
+    public int[] getStreamResolution() {
+        return new int[]{prefConfig.width, prefConfig.height};
+    }
+
+    /** The panel's own resolution, landscape, or null before Android 6. */
+    public int[] getNativeResolution() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return null;
+        Display.Mode mode = getWindowManager().getDefaultDisplay().getMode();
+        int w = mode.getPhysicalWidth(), h = mode.getPhysicalHeight();
+        return new int[]{Math.max(w, h), Math.min(w, h)};
+    }
+
+    /** End this stream (the game keeps running) and reconnect at width x height. */
+    public void switchResolution(int width, int height) {
+        if (!isResolutionSwitchAvailable() || resolutionSwitchIntent != null) {
+            return;
+        }
+        if (width == prefConfig.width && height == prefConfig.height) {
+            return;
+        }
+        // Keep the bitrate the user is streaming at: the auto ceiling when auto runs, since
+        // the current auto rate would become the new stream's ceiling
+        int kbps = 0;
+        if (streamBitrate != null) {
+            kbps = streamBitrate.isAutoRunning() && streamBitrate.getAuto() != null
+                    ? streamBitrate.getAuto().getCeilingKbps() : streamBitrate.getCurrentKbps();
+        }
+        Intent intent = new Intent(getIntent());
+        intent.putExtra(EXTRA_RESOLUTION_OVERRIDE, width + "x" + height);
+        if (kbps > 0) {
+            intent.putExtra(EXTRA_BITRATE_OVERRIDE, kbps);
+        } else {
+            intent.removeExtra(EXTRA_BITRATE_OVERRIDE);
+        }
+        // The app is still running on the host: the new stream resumes it without asking
+        confirmedAppReplacement = true;
+        LimeLog.info("Resolution switch: " + prefConfig.width + "x" + prefConfig.height + " -> "
+                + width + "x" + height + " at " + (kbps > 0 ? kbps + " kbps" : "the saved bitrate")
+                + ", ending this stream and reconnecting");
+        resolutionSwitchIntent = intent;
+        com.limelight.utils.PenumbraToast.makeText(this,
+                getResources().getString(R.string.resolution_switching, width + "x" + height),
+                Toast.LENGTH_SHORT).show();
+        // Disconnect, not quit: the game keeps running and the new stream resumes it.
+        // Game is singleTask, so the new stream starts from onDestroy once this one is gone.
+        disconnect();
+    }
+
+    private void startResolutionSwitch() {
+        Intent intent = resolutionSwitchIntent;
+        resolutionSwitchIntent = null;
+        if (intent == null) {
+            return;
+        }
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        try {
+            getApplicationContext().startActivity(intent);
+            LimeLog.info("Resolution switch: new stream activity started");
+        } catch (RuntimeException e) {
+            LimeLog.warning("Resolution switch: could not start the new stream: " + e);
         }
     }
 

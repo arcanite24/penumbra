@@ -379,12 +379,49 @@ public class GameMenu implements Game.GameMenuCallbacks {
                     this::showBitrateDialog));
         }
 
+        // Penumbra (PEN-10): resolution, by reconnecting
+        if (game.isResolutionSwitchAvailable()) {
+            int[] res = game.getStreamResolution();
+            options.add(new MenuOption(game.getResources().getString(R.string.game_menu_resolution,
+                    res[0] + "x" + res[1]), this::showResolutionMenu));
+        }
+
         options.add(new MenuOption(getString(R.string.game_menu_advanced), true,
                 () -> showAdvancedMenu(device)));
 
         options.add(new MenuOption(getString(R.string.game_menu_cancel), null));
 
         showMenuDialog(getString(R.string.quick_menu_title), options.toArray(new MenuOption[options.size()]));
+    }
+
+    /** Common stream sizes plus the panel's own; picking one reconnects the stream. */
+    private void showResolutionMenu() {
+        int[] current = game.getStreamResolution();
+        java.util.List<int[]> sizes = new java.util.ArrayList<>();
+        sizes.add(new int[]{1280, 720});
+        sizes.add(new int[]{1920, 1080});
+        sizes.add(new int[]{2560, 1440});
+        sizes.add(new int[]{3840, 2160});
+        int[] nativeRes = game.getNativeResolution();
+
+        List<MenuOption> options = new ArrayList<>();
+        if (nativeRes != null) {
+            final int nw = nativeRes[0], nh = nativeRes[1];
+            options.add(new MenuOption(label(game.getResources().getString(R.string.resolution_native_option, nw + "x" + nh),
+                    nw == current[0] && nh == current[1]), () -> game.switchResolution(nw, nh)));
+        }
+        for (int[] s : sizes) {
+            if (nativeRes != null && s[0] == nativeRes[0] && s[1] == nativeRes[1]) continue;
+            final int w = s[0], h = s[1];
+            options.add(new MenuOption(label(w + "x" + h, w == current[0] && h == current[1]),
+                    () -> game.switchResolution(w, h)));
+        }
+        options.add(new MenuOption(getString(R.string.game_menu_cancel), null));
+        showMenuDialog(getString(R.string.resolution_menu_title), options.toArray(new MenuOption[0]));
+    }
+
+    private String label(String name, boolean current) {
+        return current ? game.getResources().getString(R.string.resolution_current_option, name) : name;
     }
 
     /** A slider for the stream's bitrate, applied live through the host's /bitrate. */
