@@ -89,6 +89,28 @@
             android:summary="@string/summary_pyrowave_late_frames"
             android:title="@string/title_pyrowave_late_frames"
             app:iconSpaceReserved="false" />
+    </PreferenceCategory>
+
+    <!-- Penumbra (PEN-10): the Vulkan renderer, for every codec. Front buffer and GPU boost keep
+         the keys they had under PyroWave. -->
+    <PreferenceCategory
+        android:key="category_vulkan_renderer_settings"
+        android:title="@string/category_vulkan_renderer_settings"
+        app:iconSpaceReserved="false">
+        <CheckBoxPreference
+            android:defaultValue="false"
+            android:key="checkbox_vulkan_renderer"
+            android:summary="@string/summary_vulkan_renderer"
+            android:title="@string/title_vulkan_renderer"
+            app:iconSpaceReserved="false" />
+        <ListPreference
+            android:defaultValue="off"
+            android:entries="@array/vulkan_upscaler_names"
+            android:entryValues="@array/vulkan_upscaler_values"
+            android:key="list_vulkan_upscaler"
+            android:summary="@string/summary_vulkan_upscaler"
+            android:title="@string/title_vulkan_upscaler"
+            app:iconSpaceReserved="false" />
         <CheckBoxPreference
             android:defaultValue="false"
             android:key="checkbox_pyrowave_front_buffer"

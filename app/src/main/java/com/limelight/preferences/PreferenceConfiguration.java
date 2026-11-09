@@ -376,8 +376,20 @@ public class PreferenceConfiguration {
     public static final int PYROWAVE_LATE_FRAMES_BALANCED = 1;
     public static final int PYROWAVE_LATE_FRAMES_SMOOTH = 2;
     public int pyrowaveLateFrames = PYROWAVE_LATE_FRAMES_BALANCED;
-    public boolean pyrowaveFrontBuffer;
-    public boolean pyrowaveGpuBoost;
+    // Vulkan renderer options (PEN-10), for PyroWave and, with vulkanRenderer, H.264, HEVC and AV1.
+    // Front buffer and GPU boost keep the keys PEN-9 gave them under PyroWave.
+    public static final String VULKAN_RENDERER_PREF_STRING = "checkbox_vulkan_renderer";
+    public static final String VULKAN_FRONT_BUFFER_PREF_STRING = "checkbox_pyrowave_front_buffer";
+    public static final String VULKAN_GPU_BOOST_PREF_STRING = "checkbox_pyrowave_gpu_boost";
+    public static final String UPSCALER_PREF_STRING = "list_vulkan_upscaler";
+    public boolean vulkanRenderer;
+    public boolean vulkanFrontBuffer;
+    public boolean vulkanGpuBoost;
+    // How the Vulkan renderer scales a smaller stream up to the screen: vkr::Upscaler
+    public static final int UPSCALER_OFF = 0;
+    public static final int UPSCALER_FSR = 1;
+    public static final int UPSCALER_SGSR = 2;
+    public int upscaler = UPSCALER_OFF;
     public boolean absoluteMouseMode;
     public boolean enableAudioFx;
     public boolean reduceRefreshRate;
@@ -876,8 +888,12 @@ private static int getFramePacingValue(Context context) {
             String lateFrames = prefs.getString("pyrowave_late_frames", "balanced");
             config.pyrowaveLateFrames = "off".equals(lateFrames) ? PYROWAVE_LATE_FRAMES_OFF :
                     "smooth".equals(lateFrames) ? PYROWAVE_LATE_FRAMES_SMOOTH : PYROWAVE_LATE_FRAMES_BALANCED;
-            config.pyrowaveFrontBuffer = prefs.getBoolean("checkbox_pyrowave_front_buffer", false);
-            config.pyrowaveGpuBoost = prefs.getBoolean("checkbox_pyrowave_gpu_boost", false);
+            config.vulkanRenderer = prefs.getBoolean(VULKAN_RENDERER_PREF_STRING, false);
+            config.vulkanFrontBuffer = prefs.getBoolean(VULKAN_FRONT_BUFFER_PREF_STRING, false);
+            config.vulkanGpuBoost = prefs.getBoolean(VULKAN_GPU_BOOST_PREF_STRING, false);
+            String upscaler = prefs.getString(UPSCALER_PREF_STRING, "off");
+            config.upscaler = "fsr".equals(upscaler) ? UPSCALER_FSR :
+                    "sgsr".equals(upscaler) ? UPSCALER_SGSR : UPSCALER_OFF;
         }
         config.preferLowerDelays = getPreferLowerDelays(context);
 

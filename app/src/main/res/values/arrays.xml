@@ -129,6 +129,16 @@
         <item>balanced</item>
         <item>smooth</item>
     </string-array>
+    <string-array name="vulkan_upscaler_names">
+        <item>@string/vulkan_upscaler_off</item>
+        <item>@string/vulkan_upscaler_fsr</item>
+        <item>@string/vulkan_upscaler_sgsr</item>
+    </string-array>
+    <string-array name="vulkan_upscaler_values" translatable="false">
+        <item>off</item>
+        <item>fsr</item>
+        <item>sgsr</item>
+    </string-array>
     <string-array name="video_format_values" translatable="false">
         <item>auto</item>
         <item>forceav1</item>

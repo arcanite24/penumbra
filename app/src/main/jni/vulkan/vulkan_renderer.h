@@ -26,6 +26,15 @@
 
 namespace vkr {
 
+// Penumbra (PEN-10): how a stream smaller than the output surface is scaled up to it. With Off,
+// or a surface no larger than the stream, the picture is drawn at the surface's size with the
+// sampler's bilinear filter, as before. Values match PreferenceConfiguration.UPSCALER_*.
+enum class Upscaler : int {
+    Off = 0,
+    Fsr = 1,   // AMD FSR 1: EASU into an intermediate image the output's size, then RCAS sharpening
+    Sgsr = 2,  // Snapdragon GSR 1: one pass, straight to the swapchain
+};
+
 struct RendererConfig {
     int streamWidth = 0;
     int streamHeight = 0;
@@ -41,7 +50,9 @@ struct RendererConfig {
     bool pyrowaveCenterChroma = false;  // From the nonary host: 4:2:0 chroma sited at the center
     int pyrowaveLateFrames = 1;  // PreferenceConfiguration.PYROWAVE_LATE_FRAMES_* (0 off, 1 balanced, 2 smoother)
     bool frontBuffer = false;    // A front buffer aligned to the scan, where the device has one
-    bool pyrowaveGpuBoost = false;  // Keep the GPU busy between PyroWave decodes (GpuKeepBusy)
+    bool gpuBoost = false;       // Keep the GPU busy between frames so its clock stays up (GpuKeepBusy)
+    // Penumbra (PEN-10): upscale the stream to an output surface larger than it (Upscaler)
+    int upscaler = 0;
     std::string codec;           // h264, hevc, av1 or pyrowave, for pacer traces
     std::string decoderName;     // The MediaCodec decoder, empty for PyroWave, for pacer traces
     std::string traceDirectory;  // Where pacer traces go when enabled (see PacerTrace)
@@ -280,8 +291,23 @@ private:
     void destroyConversion();
     bool ensurePipeline();
     bool ensurePlanarPipeline();
-    bool createPipeline(VkPipelineLayout layout, VkShaderModule fragShader, VkPipeline* pipeline);
+    // renderPass: the one the pipeline draws in, the swapchain's if null
+    bool createPipeline(VkPipelineLayout layout, VkShaderModule fragShader, VkPipeline* pipeline,
+                        VkRenderPass renderPass = VK_NULL_HANDLE);
     void destroyPipelines();
+
+    // Upscaling (Upscaler). Whether it applies is settled with each swapchain: the swapchain has
+    // to be larger than the stream. Render thread, under renderMutex_.
+    bool createUpscaleShaders();
+    // The pipelines this frame's draw needs, for the planar (PyroWave) or MediaCodec source;
+    // false if one couldn't be made
+    bool ensureUpscalePipelines(bool planar);
+    // FSR's intermediate image, at the (unrotated) output size, and what RCAS reads it through
+    bool createUpscaleTarget(VkExtent2D extent);
+    void destroyUpscaleTarget();
+    void destroyUpscalePipelines();
+    // Gives up on upscaling for the rest of the stream after a failure, drawing as without it
+    void disableUpscaling(const char* why);
     // Every use of the queue is under queueMutex_, since PyroWave submits to it from the
     // decoding thread
     void waitIdle();
@@ -417,6 +443,43 @@ private:
     VkShaderModule planarFragShader_ = VK_NULL_HANDLE;
     VkPipelineLayout planarPipelineLayout_ = VK_NULL_HANDLE;
     VkPipeline planarPipeline_ = VK_NULL_HANDLE;
+
+    // Upscaling. Active when an upscaler is chosen and the swapchain is larger than the stream;
+    // outputExtent_ is then the swapchain's size before pre-rotation. Sharpness is RCAS's
+    // strength (0 none to 1 FSR's sharpest) for FSR, the edge sharpness (1 to 2) for SGSR; adb shell
+    // setprop debug.penumbra.upscale_sharpness <value> to try another.
+    Upscaler upscaler_ = Upscaler::Off;
+    bool upscaleActive_ = false;
+    bool upscaleFailed_ = false;
+    float upscaleSharpness_ = 0.0f;
+    VkExtent2D outputExtent_ {};
+    VkShaderModule easuFragShader_ = VK_NULL_HANDLE;
+    VkShaderModule easuPlanarFragShader_ = VK_NULL_HANDLE;
+    VkShaderModule rcasFragShader_ = VK_NULL_HANDLE;
+    VkShaderModule sgsrFragShader_ = VK_NULL_HANDLE;
+    VkShaderModule sgsrPlanarFragShader_ = VK_NULL_HANDLE;
+    // EASU and SGSR from MediaCodec's buffers, in pipelineLayout_ (dropped with the conversion)
+    VkPipeline easuPipeline_ = VK_NULL_HANDLE;
+    VkPipeline sgsrPipeline_ = VK_NULL_HANDLE;
+    // From PyroWave's planes, in planarPipelineLayout_
+    VkPipeline easuPlanarPipeline_ = VK_NULL_HANDLE;
+    VkPipeline sgsrPlanarPipeline_ = VK_NULL_HANDLE;
+    // FSR: EASU draws into upscaleImage_ in upscaleRenderPass_, RCAS reads it onto the swapchain
+    VkFormat upscaleFormat_ = VK_FORMAT_UNDEFINED;
+    VkRenderPass upscaleRenderPass_ = VK_NULL_HANDLE;
+    VkImage upscaleImage_ = VK_NULL_HANDLE;
+    VkDeviceMemory upscaleMemory_ = VK_NULL_HANDLE;
+    VkImageView upscaleView_ = VK_NULL_HANDLE;
+    VkFramebuffer upscaleFramebuffer_ = VK_NULL_HANDLE;
+    VkExtent2D upscaleTargetExtent_ {};
+    VkSampler upscaleSampler_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout rcasSetLayout_ = VK_NULL_HANDLE;
+    VkDescriptorPool rcasPool_ = VK_NULL_HANDLE;
+    VkDescriptorSet rcasSet_ = VK_NULL_HANDLE;
+    VkPipelineLayout rcasPipelineLayout_ = VK_NULL_HANDLE;
+    VkPipeline rcasPipeline_ = VK_NULL_HANDLE;
+    // For the overlay, under mutex_: "FSR 1280x720 to 1920x1080", or empty
+    std::string upscaleDescription_;
 
     // PyroWave frames whose decode is queued on the GPU. A thread waits for each to finish
     // before it goes to the pacer, as MediaCodec's frames do, so the pacer times frames that can

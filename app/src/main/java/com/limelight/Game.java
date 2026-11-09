@@ -958,7 +958,21 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
                 // Avoid resizes/glitches that break the compositor
                 int vw = (prefConfig != null && prefConfig.width > 0) ? prefConfig.width : displayWidth;
                 int vh = (prefConfig != null && prefConfig.height > 0) ? prefConfig.height : displayHeight;
-                try { streamSurfaceView.getHolder().setFixedSize(vw, vh); } catch (Throwable ignored) {}
+                // PEN-10: with an upscaler, the Vulkan renderer draws at the view's size, scaling the
+                // stream up itself, so the surface keeps the view's size rather than the stream's.
+                // The renderer only upscales when the surface is larger than the stream.
+                boolean vulkanUpscaling = prefConfig != null
+                        && prefConfig.upscaler != PreferenceConfiguration.UPSCALER_OFF
+                        && prefConfig.renderMode == 0
+                        && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+                        && (prefConfig.vulkanRenderer
+                            || prefConfig.videoFormat == PreferenceConfiguration.FormatOption.FORCE_PYROWAVE)
+                        && com.limelight.binding.video.VulkanRendererBridge.isSupported();
+                if (vulkanUpscaling) {
+                    LimeLog.info("Upscaling in the Vulkan renderer: the stream surface keeps the view's size");
+                } else {
+                    try { streamSurfaceView.getHolder().setFixedSize(vw, vh); } catch (Throwable ignored) {}
+                }
                 try { streamSurfaceView.setZOrderOnTop(false); } catch (Throwable ignored) {}
                 try { streamSurfaceView.setZOrderMediaOverlay(false); } catch (Throwable ignored) {}
 

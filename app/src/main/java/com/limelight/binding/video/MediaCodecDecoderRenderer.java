@@ -198,8 +198,16 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private boolean pyrowave;
     private volatile VulkanRendererBridge vulkanRenderer;
     private long pyrowaveDecodeNs;
+    // PEN-10: H.264, HEVC and AV1 through the Vulkan renderer as well, when it's chosen and runs
+    // here: MediaCodec decodes into the renderer's AImageReader, and the renderer paces and
+    // presents. Cleared if the renderer fails to start, leaving the direct path.
+    private boolean wantVulkan;
+    private volatile boolean hdrEnabled;
+    private volatile byte[] hdrMetadataForVulkan;
+    private boolean vulkanFallbackReported;
+    private boolean frontBufferUnavailableReported;
     // The extended arguments of the decode unit being submitted (submitDecodeUnit() overload)
-    private long duPresentationTimeUs, duEnqueueTimeUs;
+    private long duPresentationTimeUs, duEnqueueTimeUs, duReceiveTimeUs;
     private int[] duMissingRanges, duRecordStarts;
     private int duPartialKind;
 
@@ -439,6 +447,16 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             refFrameInvalidationAvc = refFrameInvalidationHevc = false;
             LimeLog.warning("Disabling RFI due to previous crash");
         }
+
+        // PEN-10: the Vulkan renderer for MediaCodec's frames is opt-in. It needs Android 10 for the
+        // NDK image reader and Choreographer APIs, and the 2D stream view (the 3D modes draw the
+        // video themselves).
+        if (prefs.vulkanRenderer) {
+            wantVulkan = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && prefs.renderMode == 0 &&
+                    VulkanRendererBridge.isSupported();
+            LimeLog.info(wantVulkan ? "Vulkan renderer selected for MediaCodec streams" :
+                    "Vulkan renderer selected but unsupported here (needs Android 10+, Vulkan 1.1 and the 2D view); using the direct renderer");
+        }
     }
 
     public boolean isHevcSupported() {
@@ -530,7 +548,88 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     }
 
     /** The Vulkan renderer's PacingMode::HostTimed (frame_pacer.h); no frame pacing setting maps to it. */
-    private static final int PYROWAVE_PACING_HOST_TIMED = 4;
+    private static final int VULKAN_PACING_HOST_TIMED = 4;
+
+    /** Whether frames go through the Vulkan renderer: PyroWave, or MediaCodec's with it chosen. */
+    public boolean isVulkanRendererActive() {
+        return vulkanRenderer != null;
+    }
+
+    private String getPacerTraceDirectory() {
+        try {
+            java.io.File directory = activity.getExternalFilesDir("pacer-traces");
+            return directory != null ? directory.getAbsolutePath() : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private String getVulkanCodecName() {
+        if (pyrowave) {
+            return "pyrowave";
+        } else if ((videoFormat & MoonBridge.VIDEO_FORMAT_MASK_H264) != 0) {
+            return "h264";
+        } else if ((videoFormat & MoonBridge.VIDEO_FORMAT_MASK_H265) != 0) {
+            return "hevc";
+        } else if ((videoFormat & MoonBridge.VIDEO_FORMAT_MASK_AV1) != 0) {
+            return "av1";
+        }
+        return "unknown";
+    }
+
+    /**
+     * Starts the Vulkan renderer on the output surface, for PyroWave or for MediaCodec's frames,
+     * with the same pacing, front buffer, GPU boost and upscaling choices either way. Null if it
+     * couldn't start.
+     */
+    private VulkanRendererBridge createVulkanRenderer(int width, int height, boolean tenBit, boolean fullRange,
+                                                      boolean centerChroma, String decoderName) {
+        float displayRefreshHz = 60.0f;
+        try {
+            displayRefreshHz = activity.getWindowManager().getDefaultDisplay().getRefreshRate();
+        } catch (Exception ignored) {}
+
+        // The renderer's jitter buffer: low latency (0) with the lowest-latency pacing, else balanced (1)
+        int jitterBuffer = prefs.framePacing == PreferenceConfiguration.FRAME_PACING_MIN_LATENCY ? 0 : 1;
+        // The renderer only draws into a front buffer when it places frames itself: host-timed
+        // pacing puts each frame on a scan from the host's frame times, with the jitter buffer
+        // absorbing network jitter, so a front buffer always uses it
+        // absorbing network jitter, so a front buffer always uses it. Without one, the renderer's
+        // own vsync-picking modes (balanced, cap, smoothest) skipped about 1 frame in 12 at
+        // 120 fps on the Odin 2, where host-timed pacing showed 119 of 120, so they map to
+        // host-timed too; lowest latency keeps showing each frame as it arrives
+        int pacing = prefs.vulkanFrontBuffer || prefs.framePacing != PreferenceConfiguration.FRAME_PACING_MIN_LATENCY
+                ? VULKAN_PACING_HOST_TIMED : prefs.framePacing;
+        VulkanRendererBridge renderer = VulkanRendererBridge.create(renderTarget, width, height, targetFps,
+                pacing, jitterBuffer, 0 /* no dithering */,
+                getPreferredColorSpace(), fullRange, tenBit,
+                pyrowave, centerChroma, prefs.pyrowaveLateFrames, displayRefreshHz,
+                getVulkanCodecName(), decoderName, getPacerTraceDirectory(), prefs.vulkanFrontBuffer,
+                prefs.vulkanGpuBoost, prefs.upscaler);
+        if (renderer != null) {
+            LimeLog.info("Vulkan renderer started: " + getVulkanCodecName() + " " + width + "x" + height +
+                    (tenBit ? " 10-bit" : "") + ", pacing mode " + pacing + ", front buffer " +
+                    (prefs.vulkanFrontBuffer ? "on" : "off") + ", GPU boost " + (prefs.vulkanGpuBoost ? "on" : "off") +
+                    ", upscaler " + prefs.upscaler);
+            try {
+                renderer.setVsyncOffset(activity.getWindowManager().getDefaultDisplay().getAppVsyncOffsetNanos());
+            } catch (Exception ignored) {}
+            if (hdrEnabled) {
+                renderer.setHdrMode(true, hdrMetadataForVulkan);
+            }
+        }
+        return renderer;
+    }
+
+    private void reportVulkanFallback() {
+        if (vulkanFallbackReported) {
+            return;
+        }
+        vulkanFallbackReported = true;
+        LimeLog.warning("Vulkan renderer failed to start; using the direct renderer");
+        activity.runOnUiThread(() -> com.limelight.utils.PenumbraToast.makeText(activity,
+                R.string.toast_vulkan_fallback, android.widget.Toast.LENGTH_LONG).show());
+    }
 
     private int setupPyrowave(int width, int height) {
         pyrowave = true;
@@ -540,23 +639,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         boolean centerChroma = bitstreamId != null && !bitstreamId.isEmpty();
         LimeLog.info("PyroWave host bitstream revision: " + (centerChroma ? bitstreamId : "(not given)"));
 
-        float displayRefreshHz = 60.0f;
-        try {
-            displayRefreshHz = activity.getWindowManager().getDefaultDisplay().getRefreshRate();
-        } catch (Exception ignored) {}
-
         boolean tenBit = (videoFormat & MoonBridge.VIDEO_FORMAT_PYROWAVE_10BIT) != 0;
-        // The renderer's jitter buffer: low latency (0) with the lowest-latency pacing, else balanced (1)
-        int jitterBuffer = prefs.framePacing == PreferenceConfiguration.FRAME_PACING_MIN_LATENCY ? 0 : 1;
-        // The renderer only draws into a front buffer when it places frames itself: host-timed
-        // pacing puts each frame on a scan from the host's frame times, with the jitter buffer
-        // absorbing network jitter, so a front buffer always uses it
-        int pacing = prefs.pyrowaveFrontBuffer ? PYROWAVE_PACING_HOST_TIMED : prefs.framePacing;
-        vulkanRenderer = VulkanRendererBridge.create(renderTarget, width, height, targetFps,
-                pacing, jitterBuffer, 0 /* no dithering */,
-                getPreferredColorSpace(), true /* PyroWave is always full range */, tenBit,
-                true, centerChroma, prefs.pyrowaveLateFrames, displayRefreshHz,
-                "pyrowave", null, null, prefs.pyrowaveFrontBuffer, prefs.pyrowaveGpuBoost);
+        // PyroWave is always full range
+        vulkanRenderer = createVulkanRenderer(width, height, tenBit, true, centerChroma, null);
         if (vulkanRenderer == null) {
             LimeLog.severe("PyroWave decoding failed to start");
             return -1;
@@ -573,6 +658,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         // Frames come from one thread, so the extras can ride along in fields
         duPresentationTimeUs = presentationTimeUs;
         duEnqueueTimeUs = enqueueTimeUs;
+        duReceiveTimeUs = receiveTimeUs;
         duMissingRanges = missingRanges;
         duRecordStarts = recordStarts;
         duPartialKind = partialKind;
@@ -691,7 +777,28 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         LimeLog.info("Configuring with format: "+format);
 
-        videoDecoder.configure(format, renderTarget, null, 0);
+        // PEN-10: the Vulkan renderer lives as long as this object, so a decoder restart (codec
+        // recovery, or an HDR change) decodes into the same image reader
+        if (wantVulkan && vulkanRenderer == null) {
+            String decoderName = null;
+            try {
+                decoderName = videoDecoder.getName();
+            } catch (Exception ignored) {}
+            vulkanRenderer = createVulkanRenderer(initialWidth, initialHeight,
+                    (videoFormat & MoonBridge.VIDEO_FORMAT_MASK_10BIT) != 0,
+                    getPreferredColorRange() == MoonBridge.COLOR_RANGE_FULL, false, decoderName);
+            if (vulkanRenderer == null) {
+                wantVulkan = false;
+                reportVulkanFallback();
+            }
+        }
+        VulkanRendererBridge vulkan = vulkanRenderer;
+        Surface decoderSurface = vulkan != null ? vulkan.getDecoderSurface() : renderTarget;
+        if (vulkan != null) {
+            LimeLog.info("MediaCodec decodes into the Vulkan renderer's image reader");
+        }
+
+        videoDecoder.configure(format, decoderSurface, null, 0);
 
         // Penumbra (PEN-6): the surface frame rate is set once, in Game.surfaceCreated(), which
         // picks the refresh rate that suits the stream. Overriding it here with the raw stream FPS
@@ -1218,8 +1325,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     }
 
     private void startChoreographerThread() {
-        if (prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED) {
-            // Not using Choreographer in this pacing mode
+        if (prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED || vulkanRenderer != null) {
+            // Not using Choreographer in this pacing mode, or the Vulkan renderer paces frames
             return;
         }
 
@@ -1334,8 +1441,16 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                             }
                             lastDecoderPtsUs = presentationTimeUs;
 
+                            if (vulkanRenderer != null) {
+                                // PEN-10: the Vulkan renderer paces frames itself, so each one goes
+                                // to its image reader as soon as it's decoded. What it presents is
+                                // counted from the renderer (submitDecodeUnit()).
+                                videoDecoder.releaseOutputBuffer(lastIndex, true);
+                                updateDecodeLatencyStats(presentationTimeUs);
+                                statsUpdated = true;
+                            }
                             // Render the latest frame now if frame pacing isn't in balanced mode
-                            if (prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED) {
+                            else if (prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED) {
                                 // Get the last output buffer in the queue. Non-blocking: waiting here
                                 // would delay presenting a frame we already have.
                                 while ((outIndex = videoDecoder.dequeueOutputBuffer(info, 0)) >= 0) {
@@ -1540,6 +1655,13 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             codecRecoveryMonitor.notifyAll();
         }
 
+        // PEN-10: the output surface may be about to go away, so the Vulkan renderer stops
+        // presenting to it now. MediaCodec can still write into its image reader.
+        VulkanRendererBridge vulkanToStop = vulkanRenderer;
+        if (vulkanToStop != null && !pyrowave) {
+            vulkanToStop.stop();
+        }
+
         // Post a quit message to the Choreographer looper (if we have one)
         if (choreographerHandler != null) {
             choreographerHandler.post(new Runnable() {
@@ -1605,16 +1727,29 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             }
             return;
         }
-        videoDecoder.release();
+        if (videoDecoder != null) {
+            videoDecoder.release();
+        }
+
+        // Only once the decoder has let go of the renderer's image reader
+        VulkanRendererBridge vulkan = vulkanRenderer;
+        vulkanRenderer = null;
+        if (vulkan != null) {
+            vulkan.destroy();
+        }
     }
 
     @Override
     public void setHdrMode(boolean enabled, byte[] hdrMetadata) {
+        hdrEnabled = enabled;
+        hdrMetadataForVulkan = hdrMetadata;
+        // The Vulkan renderer switches its output between SDR and HDR10 itself (PEN-10 for
+        // MediaCodec's frames), and MediaCodec below still restarts to pick up the metadata
+        VulkanRendererBridge vulkanForHdr = vulkanRenderer;
+        if (vulkanForHdr != null) {
+            vulkanForHdr.setHdrMode(enabled, hdrMetadata);
+        }
         if (pyrowave) {
-            VulkanRendererBridge vulkan = vulkanRenderer;
-            if (vulkan != null) {
-                vulkan.setHdrMode(enabled, hdrMetadata);
-            }
             return;
         }
         // HDR metadata is only supported in Android 7.0 and later, so don't bother
@@ -1738,8 +1873,27 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         lastFrameNumber = frameNumber;
 
+        // PEN-10: MediaCodec's frames through the Vulkan renderer are counted as rendered once the
+        // renderer presents them (PyroWave counts its own in submitPyrowaveFrame())
+        VulkanRendererBridge vulkanStats = vulkanRenderer;
+        if (vulkanStats != null && !pyrowave) {
+            activeWindowVideoStats.totalFramesRendered += vulkanStats.takePresentedFrames();
+        }
+
         // Flip stats windows roughly every second
         if (SystemClock.uptimeMillis() >= activeWindowVideoStats.measurementStartTimestamp + 1000) {
+            if (vulkanStats != null) {
+                // The display mode can change mid-stream
+                try {
+                    vulkanStats.setVsyncOffset(activity.getWindowManager().getDefaultDisplay().getAppVsyncOffsetNanos());
+                } catch (Exception ignored) {}
+                if (!frontBufferUnavailableReported && vulkanStats.isFrontBufferUnavailable()) {
+                    frontBufferUnavailableReported = true;
+                    LimeLog.warning("Front buffer asked for, but the device has none; using the normal swapchain");
+                    activity.runOnUiThread(() -> com.limelight.utils.PenumbraToast.makeText(activity,
+                            R.string.toast_vulkan_front_buffer_unavailable, android.widget.Toast.LENGTH_LONG).show());
+                }
+            }
             if (prefs.enablePerfOverlay || prefs.enablePerfLogging) {
                 VideoStats lastTwo = new VideoStats();
                 lastTwo.add(lastWindowVideoStats);
@@ -1819,6 +1973,19 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     }
                     sb.append('\n');
                     sb.append(context.getString(R.string.perf_overlay_decoder, decoder)).append('\n');
+                    if (vulkanStats != null) {
+                        // PEN-10: what the Vulkan renderer outputs (HDR, upscaling) and its pacing
+                        String rendererText = vulkanStats.getRendererText();
+                        String pacingText = vulkanStats.getPacingText();
+                        StringBuilder renderer = new StringBuilder(rendererText != null ? rendererText : "Vulkan");
+                        if (vulkanStats.isFrontBufferActive()) {
+                            renderer.append(", front buffer");
+                        }
+                        if (pacingText != null && !pacingText.isEmpty()) {
+                            renderer.append(", ").append(pacingText.replace('\n', ' ').trim());
+                        }
+                        sb.append(context.getString(R.string.perf_overlay_renderer, renderer.toString())).append('\n');
+                    }
                     sb.append(context.getString(R.string.perf_overlay_incomingfps, fps.receivedFps)).append('\n');
                     sb.append(context.getString(R.string.perf_overlay_renderingfps, fps.renderedFps)).append('\n');
                     sb.append(context.getString(R.string.perf_overlay_netdrops,
@@ -2123,7 +2290,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             }
         }
 
-        long timestampUs = enqueueTimeMs * 1000;
+        // PEN-10: through the Vulkan renderer, each frame carries the host's timestamp, which its
+        // pacer reads back from the image (AImage_getTimestamp()) to place frames on vsyncs
+        VulkanRendererBridge vulkanInput = vulkanRenderer;
+        long timestampUs = vulkanInput != null && !pyrowave && duPresentationTimeUs > 0 ?
+                duPresentationTimeUs : enqueueTimeMs * 1000;
         if (timestampUs <= lastTimestampUs) {
             // We can't submit multiple buffers with the same timestamp
             // so bump it up by one before queuing
@@ -2145,6 +2316,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         // Copy data from our buffer list into the input buffer
         nextInputBuffer.put(decodeUnitData, 0, decodeUnitLength);
+
+        if (vulkanInput != null) {
+            vulkanInput.noteFrameReceived(timestampUs, duReceiveTimeUs, duEnqueueTimeUs, frameHostProcessingLatency);
+        }
 
         if (!queueNextInputBuffer(timestampUs, codecFlags)) {
             return MoonBridge.DR_NEED_IDR;
